@@ -1,165 +1,252 @@
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from datetime import datetime, timedelta
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import Select
+from selenium.common.exceptions import TimeoutException
+import time
+import re
+import os
 
-# Mapping from internal section codes to roadpolice.am branch IDs (from HTML)
-SECTION_CODE_TO_ID = {
-    "Yerevan": "33",
-    "Shirak": "39",
-    "Lori": "40",
-    "Armavir": "38",
-    "Kotayk": "42",
-    "Ararat": "44",
-    "Aragatsotn": "43",
-    "Syunik_Kapan": "36",
-    "Tavush": "41",
-    "Gegharkunik_Sevan": "34",
-    "Gegharkunik_Martuni": "35",
-    "Syunik_Goris": "37",
-    "Vayots_Dzor": "45"
-}
+# Initialize Chrome options for headless browsing
+chrome_options = Options()
+# Specify Chrome binary location from environment
+chrome_options.binary_location = os.environ.get("GOOGLE_CHROME_BIN", None)
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+chrome_options.add_argument("--disable-dev-shm-usage")
 
-# Mapping exam type to serviceId values from HTML
-EXAM_TYPE_TO_SERVICE_ID = {
-    "theory": "300691",      # Theoretical exam for new license
-    "practical": "300692"    # Practical exam for new license
-}
-
-def fetch_data(section_code: str, exam_type: str, filter_day: int = None, filter_date: str = None, filter_hour: str = None) -> str:
-    """Launch headless Chrome and scrape appointment data from roadpolice.am."""
-    # Configure Chrome options for headless execution:contentReference[oaicite:0]{index=0}
-    options = Options()
-    options.add_argument("--headless")        # Run Chrome in headless mode:contentReference[oaicite:1]{index=1}
-    options.add_argument("--no-sandbox")      # No sandbox (required in some container envs):contentReference[oaicite:2]{index=2}
-    options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems:contentReference[oaicite:3]{index=3}
-    options.add_argument("--disable-gpu")
-    # Launch browser with webdriver-manager to obtain ChromeDriver:contentReference[oaicite:4]{index=4}
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
+def login_start(phone_number: str):
+    """
+    Start login process on roadpolice.am using mobile ID (phone + SMS).
+    Opens the site, enters the phone number and clicks the Login button to trigger SMS code.
+    Returns the Selenium WebDriver instance (with session alive for further steps).
+    """
+    # Launch headless Chrome browser
+    service = Service(os.environ.get("CHROMEDRIVER_PATH"))
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    driver.implicitly_wait(10)  # implicit wait for elements to load
+    # Open the Armenian version of roadpolice.am (for correct field labels)
+    driver.get("https://roadpolice.am/hy")
+    # Find phone number input field and enter the number
+    # The phone number is entered without country code, assuming +374 is default
     try:
-        # Navigate to the Road Police appointment page (Armenian language)
-        driver.get("https://roadpolice.am/hy/hqb")
-        # Select the desired service (exam type)
-        service_select = driver.find_element("name", "serviceId")
-        service_id = EXAM_TYPE_TO_SERVICE_ID.get(exam_type)
-        if service_id:
-            service_select.send_keys(service_id)  # Select by value
-        # Select the branch (registration-exam division) by its ID
-        branch_select = driver.find_element("name", "branchId")
-        branch_id = SECTION_CODE_TO_ID.get(section_code)
-        if branch_id:
-            branch_select.send_keys(branch_id)
-        # If a specific date filter is provided, attempt to select that date
-        if filter_date:
-            # Click date input to open calendar
-            date_input = driver.find_element("id", "date-input")
-            driver.execute_script("arguments[0].click();", date_input)
-            # Format the provided date string to match required format (DD.MM.YYYY)
-            try:
-                target_date = datetime.strptime(filter_date, "%d.%m.%Y")
-            except ValueError:
-                try:
-                    target_date = datetime.strptime(filter_date, "%Y-%m-%d")
-                except Exception:
-                    return "Ներողություն, ամսաթվի ձևաչափը սխալ է։"
-            # Find the calendar day element for the target date by aria-label
-            month_name = target_date.strftime("%B")  # e.g., 'October' (English)
-            # Convert English month to Armenian name (rough approach)
-            # Note: For simplicity, we'll map known month names to Armenian manually
-            month_name_map = {
-                "January": "Հունվար", "February": "Փետրվար", "March": "Մարտ",
-                "April": "Ապրիլ", "May": "Մայիս", "June": "Հունիս",
-                "July": "Հուլիս", "August": "Օգոստոս", "September": "Սեպտեմբեր",
-                "October": "Հոկտեմբեր", "November": "Նոյեմբեր", "December": "Դեկտեմբեր"
+        # There may be multiple phone inputs (mobile ID login and alternate login).
+        # We select the first occurrence of an input for phone.
+        phone_input = driver.find_elements(By.CSS_SELECTOR, "input[type='tel']")[0]
+    except IndexError:
+        raise Exception("Phone input field not found on roadpolice.am")
+    phone_input.clear()
+    phone_input.send_keys(phone_number)
+    # Click the "Մուտք" (Login) button to send SMS code
+    # We assume the first button with text "Մուտք" corresponds to mobile login.
+    login_buttons = driver.find_elements(By.XPATH, "//*[text()='Մուտք']")
+    if not login_buttons:
+        raise Exception("Login button not found or page structure changed")
+    login_buttons[0].click()
+    # After clicking, the SMS code should be sent to the user.
+    # The driver remains logged in waiting for code confirmation.
+    return driver
+
+def login_verify(driver, code: str) -> bool:
+    """
+    Enter the SMS code and confirm login. Returns True if login succeeds, otherwise False.
+    """
+    try:
+        # Find SMS code input field (placeholder "ՍՄՍ կոդը") and enter the code
+        code_input = driver.find_element(By.XPATH, "//input[@placeholder='ՍՄՍ կոդը']")
+    except Exception:
+        # If not found by placeholder, try by name "Password" (English placeholder)
+        try:
+            code_input = driver.find_element(By.NAME, "Password")
+        except Exception:
+            return False
+    code_input.clear()
+    code_input.send_keys(code)
+    # Click the "Հաստատել" (Confirm) button
+    try:
+        confirm_btn = driver.find_element(By.XPATH, "//*[text()='Հաստատել']")
+    except Exception:
+        # If text-based search fails, try input type submit
+        confirm_btn = driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
+    confirm_btn.click()
+    # Wait for a short time to allow login to process
+    time.sleep(3)
+    # Check if login was successful by presence of department selection (a <select> element for branches)
+    try:
+        driver.find_element(By.TAG_NAME, "select")
+        return True
+    except Exception:
+        return False
+
+def get_departments(driver):
+    """
+    After successful login, scrape the list of available registration-exam subdivisions (branches).
+    Returns a list of tuples (branch_name, branch_value) for each option.
+    """
+    # Wait for the branch selection dropdown to be present
+    # (We assume the first <select> element on the page is the branch list)
+    selects = driver.find_elements(By.TAG_NAME, "select")
+    if not selects:
+        raise Exception("Branch selection not found")
+    # Identify the select that corresponds to branches by its options
+    branch_select = None
+    for sel in selects:
+        options = sel.find_elements(By.TAG_NAME, "option")
+        texts = [opt.text for opt in options]
+        # If any option text looks like a region/city or contains "բաժին", assume this is the branch list
+        if any("բաժին" in t or "մարզ" in t or "ք." in t for t in texts):
+            branch_select = sel
+            break
+    if branch_select is None:
+        # If not identified, default to the first select
+        branch_select = selects[0]
+    # Extract options (skip any placeholder like "Ընտրեք բաժինը")
+    dept_options = []
+    for opt in branch_select.find_elements(By.TAG_NAME, "option"):
+        text = opt.text.strip()
+        value = opt.get_attribute("value")
+        if not text or "ընտրեք" in text.lower():
+            continue  # skip placeholder
+        dept_options.append((text, value))
+    # Save the list in context if needed (for name lookup)
+    # Note: This function might be called inside ConversationHandler where context is not directly accessible,
+    # so ensure to store it in context.user_data in calling function if needed.
+    return dept_options
+
+def get_available_times(driver, date_str: str):
+    """
+    Helper function: For a given date (DD.MM.YYYY), select it in the UI and return a sorted list of available time slots (HH:MM).
+    """
+    # Convert date to YYYY-MM-DD format if needed for HTML date input
+    try:
+        day, month, year = date_str.split(".")
+        html_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+    except ValueError:
+        # If date_str is already in ISO format or another, use as is
+        html_date = date_str
+    # Find date input (assuming an <input type="date"> is present)
+    date_inputs = driver.find_elements(By.CSS_SELECTOR, "input[type='date']")
+    if date_inputs:
+        date_input = date_inputs[0]
+        # Some date pickers might not allow direct send_keys; attempt to execute script
+        try:
+            driver.execute_script("arguments[0].value = arguments[1]", date_input, html_date)
+            date_input.send_keys("\ue007")  # press Enter key (Unicode \ue007) to confirm
+        except Exception:
+            date_input.clear()
+            date_input.send_keys(html_date)
+            date_input.send_keys("\ue007")
+    else:
+        # If no date input found, the date might be selected via calendar widget or drop-downs.
+        # In such case, try executing a script that sets the date by querying any date picker object.
+        driver.execute_script("""
+            var inputs = document.getElementsByTagName('input');
+            for (var i=0; i<inputs.length; i++) {
+                if (inputs[i].type==='text' && inputs[i].value.match(/\\d{4}-\\d{2}-\\d{2}/)) {
+                    inputs[i].value = arguments[0];
+                    if(typeof inputs[i].onchange === 'function'){ inputs[i].onchange(); }
+                }
             }
-            arm_month = month_name_map.get(month_name, month_name)
-            aria_label = f"{arm_month} {target_date.day}, {target_date.year}"
-            # Try to find the day element (calendar must be open from earlier click)
-            try:
-                day_elem = driver.find_element("xpath", f"//span[@aria-label='{aria_label}']")
-            except Exception:
-                return f"Տրված ամսաթվի ({filter_date}) համար տվյալներ չեն գտնվել։"
-            # Check if the day element is marked as unavailable
-            day_classes = day_elem.get_attribute("class")
-            if "flatpickr-disabled" in day_classes:
-                return f"Նշված ամսաթվի ({filter_date}) համար ազատ ժամանակներ չկան։"
-            else:
-                # Click the day to select it
-                day_elem.click()
-        # If a specific weekday filter is provided, find the nearest available date for that weekday
-        if filter_day is not None:
-            # Ensure calendar is open
-            date_input = driver.find_element("id", "date-input")
-            driver.execute_script("arguments[0].click();", date_input)
-            base_date = datetime.today()
-            found_date = None
-            for i in range(0, 35):  # search up to ~5 weeks
-                dt = base_date + timedelta(days=i)
-                if dt.weekday() == filter_day:  # Monday=0 ... Sunday=6
-                    # Check if this date is available (not fully booked)
-                    arm_month = month_name_map.get(dt.strftime("%B"), dt.strftime("%B"))
-                    aria_label = f"{arm_month} {dt.day}, {dt.year}"
-                    try:
-                        day_elem = driver.find_element("xpath", f"//span[@aria-label='{aria_label}']")
-                    except Exception:
-                        continue
-                    classes = day_elem.get_attribute("class")
-                    if "flatpickr-disabled" not in classes:
-                        found_date = dt
-                        day_elem.click()
+        """, html_date)
+    # Wait for times to load after date selection
+    time.sleep(2)
+    # Scrape the page for available times (look for patterns like "HH:MM")
+    page_html = driver.page_source
+    time_matches = re.findall(r"\d{1,2}:\d{2}", page_html)
+    # Filter and sort unique times
+    times = sorted({t for t in time_matches if re.match(r"^\d{1,2}:\d{2}$", t)})
+    return times
+
+def search_slots(driver, branch_value: str, exam_type: str, mode: str, search_value=None) -> str:
+    """
+    Select the given branch and exam type, then search for available slots according to the mode.
+    mode = 'day' (find earliest available), 'date' (specific date in DD.MM.YYYY), or 'time' (next date with given HH:MM).
+    search_value is used for 'date' (the date string) or 'time' (the time string).
+    Returns a formatted result string in Armenian for the user.
+    """
+    result_text = ""
+    # Select the desired branch in the dropdown
+    try:
+        select_elems = driver.find_elements(By.TAG_NAME, "select")
+        branch_select_elem = None
+        exam_select_elem = None
+        # Identify branch and exam selects
+        for sel in select_elems:
+            opts = [opt.text for opt in sel.find_elements(By.TAG_NAME, "option")]
+            if any("բաժին" in txt or "մարզ" in txt for txt in opts):
+                branch_select_elem = sel
+            elif any("քննություն" in txt or "քննական" in txt for txt in opts):
+                exam_select_elem = sel
+        # Fallback if not identified
+        if branch_select_elem is None:
+            branch_select_elem = select_elems[0]
+            exam_select_elem = select_elems[1] if len(select_elems) > 1 else None
+        # Select branch by value
+        Select(branch_select_elem).select_by_value(branch_value)
+        # Select exam type (theoretical/practical)
+        if exam_select_elem:
+            # If exam type is provided in options list
+            if exam_type == "theoretical":
+                # Look for option containing "Տեսական"
+                for opt in exam_select_elem.find_elements(By.TAG_NAME, "option"):
+                    if "տեսակ" in opt.text or "տեսական" in opt.text:
+                        opt.click()
                         break
-            if not found_date:
-                return "Ներողություն, նշված շաբաթվա օրվա համար մոտակա ազատ օրը չի գտնվել։"
-        # If a specific hour filter is provided, we will attempt to find a slot on the earliest available date around that time
-        if filter_hour:
-            try:
-                target_hour = datetime.strptime(filter_hour, "%H:%M").time()
-            except Exception:
-                return "Ներողություն, ժամի ձևաչափը սխալ է։"
-            # Ensure at least one day is selected (if none selected yet, use earliest default)
-            # (The page likely auto-selects the earliest available date.)
-            # Get currently selected date from the input
-            selected_date_val = driver.find_element("id", "date-input").get_attribute("value")
-            if not selected_date_val:
-                # If no date selected, just get first available by reading default
-                selected_date_val = driver.find_element("id", "select2-serviceId-vl-container").get_attribute("title")
-            # (For simplicity, we will not implement complex hour-by-hour availability check here)
-            # Just inform the user of the earliest available date and suggest the provided hour.
-            pass  # (We'll handle output after gathering info below)
-        # After any filtering, read the current selection and earliest slot info
-        # Get the selected date from the date input
-        date_val = driver.find_element("id", "date-input").get_attribute("value")
-        if not date_val:
-            date_val = "ամենամոտ օր"
-        # Get the first (selected) time slot
-        time_select = driver.find_element("name", "slotTime")
-        time_val = time_select.get_attribute("value")
-        if not time_val:
-            time_val = time_select.text.split()[0]  # fallback to first option text
-        # Prepare result text
-        exam_text = "տեսական" if exam_type == "theory" else "գործնական"
-        branch_name = section_code  # fallback to code
-        # Find actual branch name in Armenian for output (we have mapping in keyboards)
-        from keyboards import SECTION_CODE_TO_ARM
-        if section_code in SECTION_CODE_TO_ARM:
-            branch_name = SECTION_CODE_TO_ARM[section_code]
-        if filter_hour:
-            return f"Առաջին հասանելի ժամանակը շուրջ {filter_hour}-ին՝ {date_val}-ին ({branch_name} բաժին, {exam_text} քննություն)։"
-        elif filter_day is not None:
-            weekday_map = ["Երկուշաբթի","Երեքշաբթի","Չորեքշաբթի","Հինգշաբթի","Ուրբաթ","Շաբաթ","Կիրակի"]
-            day_name = weekday_map[filter_day]
-            return f"{day_name} օրվա ամենամոտ ազատ օրը `{date_val}` է ({branch_name}, {exam_text} քննություն, առաջին ժամ՝ {time_val})."
-        elif filter_date:
-            if "չկան" in date_val or "չի գտնվել" in date_val:
-                # If we returned early error, handle above, but just in case
-                return date_val
-            return f"{date_val}-ի համար հասանելի է {exam_text} քննություն ({branch_name}), առաջին ժամ՝ {time_val}։"
+            elif exam_type == "practical":
+                for opt in exam_select_elem.find_elements(By.TAG_NAME, "option"):
+                    if "գործնական" in opt.text:
+                        opt.click()
+                        break
         else:
-            # No filter: give earliest available slot info
-            return f"Առաջիկա ազատ հերթը {branch_name} բաժնում ({exam_text} քննություն)՝ {date_val} - {time_val}։"
+            # If exam type selection is not a dropdown (could be auto or not needed)
+            pass
     except Exception as e:
-        return f"Սխալ է առաջացել տվյալներ քաղելիս: {e}"
-    finally:
-        driver.quit()
+        return "Տվյալների ընտրության ընթացքում սխալ տեղի ունեցավ։"
+    # Perform search based on mode
+    if mode == "day":
+        # Find earliest available slot (iterate from today onwards)
+        from datetime import datetime, timedelta
+        today = datetime.today()
+        found_date = None
+        found_times = []
+        for i in range(0, 60):  # check up to 60 days ahead
+            d = today + timedelta(days=i)
+            date_str = d.strftime("%d.%m.%Y")
+            times = get_available_times(driver, date_str)
+            if times:
+                found_date = date_str
+                found_times = times
+                break
+        if found_date:
+            result_text = f"Առաջին հասանելի օրը՝ {found_date}, ազատ ժամեր՝ {', '.join(found_times)}"
+        else:
+            result_text = "Ներողություն, մոտակա օրերին ազատ քննության ժամեր չեն գտնվել։"
+    elif mode == "date" and search_value:
+        # Search for specific date
+        date_str = search_value
+        times = get_available_times(driver, date_str)
+        if times:
+            result_text = f"{date_str} օրỹ հասանելի ժամերն են՝ {', '.join(times)}"
+        else:
+            result_text = f"{date_str} օրվա համար ազատ ժամեր չկան։"
+    elif mode == "time" and search_value:
+        # Search for the next date that has the specified time available
+        target_time = search_value
+        from datetime import datetime, timedelta
+        today = datetime.today()
+        found_date = None
+        for i in range(0, 60):
+            d = today + timedelta(days=i)
+            date_str = d.strftime("%d.%m.%Y")
+            times = get_available_times(driver, date_str)
+            if target_time in times:
+                found_date = date_str
+                break
+        if found_date:
+            result_text = f"Հաջորդ '{target_time}' ազատ քննությունը հասանելի է {found_date} օրը։"
+        else:
+            result_text = f"Հաջորդ {60} օրվա ընթացքում '{target_time}' ժամին ազատ քննության ժամանակ չի գտնվել։"
+    else:
+        result_text = "Սխալ որոնման ձև։"
+    return result_text
