@@ -1,31 +1,32 @@
 # -*- coding: utf-8 -*-
 import logging
-from datetime import timedelta
-from typing import Optional, Dict, Any, Tuple, List
+import os
+from datetime import date
+from typing import Dict, Any, Tuple, List, Optional
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, Filters, ConversationHandler, CallbackContext
+from telegram.ext import (Updater, CommandHandler, MessageHandler, CallbackQueryHandler,
+                          Filters, ConversationHandler, CallbackContext)
 
 import config
 import database as db
 import scraper
+import keyboards
 import requests
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# STATES
+# Conversation states
 ASK_PHONE, ASK_SOCIAL, SEARCH_EXAM, SEARCH_SERVICE, SEARCH_BRANCH, SEARCH_FILTER, \
 ASK_DATE, ASK_HOUR, ASK_WEEKDAY, WAIT_SLOT_SELECT, ASK_EMAIL = range(11)
 
-# in-memory per user temp
 def get_user_state(context: CallbackContext) -> Dict[str, Any]:
     if "tmp" not in context.user_data:
         context.user_data["tmp"] = {}
     return context.user_data["tmp"]
 
-# ======== helpers ========
 def get_session_for_user(user_id: int) -> Tuple[requests.Session, str]:
     u = db.get_user(user_id)
     if u and u.get("cookies"):
@@ -49,10 +50,18 @@ def filter_services_by_exam(services: List[Tuple[str, str]], exam: str) -> List[
         low = lab.lower()
         if any(k in low for k in keys):
             out.append((lab, val))
-    # fallback: if no match, return all
     return out or services
 
-# ======== /start flow ========
+# ========== Error handler ==========
+def error_handler(update: Optional[Update], context: CallbackContext):
+    logger.exception("Unhandled error", exc_info=context.error)
+    try:
+        if update and update.effective_chat:
+            context.bot.send_message(update.effective_chat.id, "⚠️ Տեխնիկական սխալ առաջացավ։ Խնդրում ենք փորձել կրկին։")
+    except Exception:
+        pass
+
+# ========== /start ==========
 def start(update: Update, context: CallbackContext):
     user = update.effective_user
     context.user_data.clear()
@@ -79,27 +88,25 @@ def got_phone(update: Update, context: CallbackContext):
 def got_social(update: Update, context: CallbackContext):
     social = update.message.text.strip()
     if not social.isdigit():
-        update.message.reply_text("Խնդրում եմ ուղարկել միայն թվերից բաղկացած ՀԾՀ (օր. 1234567890)։")
+        update.message.reply_text("Խնդրում ենք ուղարկել միայն թվերից բաղկացած ՀԾՀ (օր. 1234567890)։")
         return ASK_SOCIAL
     st = get_user_state(context)
     st["social"] = social
     user_id = update.effective_user.id
 
-    # create session, save cookies
     sess, _ = scraper.new_session()
     db.upsert_user(user_id=user_id, phone=st["phone"], social=social, cookies=scraper.cookies_to_dict(sess.cookies))
-    update.message.reply_text("Գրանցումն ավարտվեց ✅\nԱյժմ կարող եք օգտագործել որոնումը՝ /search")
+    update.message.reply_text("Գրանցումն ավարտվեց ✅\nՕգտագործեք որոնումը՝ /search")
     return ConversationHandler.END
 
-# ======== /search flow ========
+# ========== /search ==========
 def search_cmd(update: Update, context: CallbackContext):
-    # ensure session
     user_id = update.effective_user.id
     try:
         sess, _ = get_session_for_user(user_id)
     except Exception:
         sess, _ = scraper.new_session()
-    # fetch branches/services
+
     branches, services = scraper.get_branch_and_services(sess)
     save_session_cookies(user_id, sess)
 
@@ -111,16 +118,13 @@ def search_cmd(update: Update, context: CallbackContext):
     update.message.reply_text("Ընտրեք քննության տեսակը․", reply_markup=keyboards.exam_type_keyboard())
     return SEARCH_EXAM
 
-import keyboards
-
 def picked_exam(update: Update, context: CallbackContext):
     exam = update.message.text.strip()
     if exam not in ("Տեսական", "Գործնական"):
-        update.message.reply_text("Խնդրում եմ ընտրել «Տեսական» կամ «Գործնական»։")
+        update.message.reply_text("Խնդրում ենք ընտրել «Տեսական» կամ «Գործնական»։")
         return SEARCH_EXAM
     st = get_user_state(context)
     st["chosen"]["exam"] = exam
-    # filter services
     services_all: List[Tuple[str, str]] = st.get("services_all", [])
     services = filter_services_by_exam(services_all, exam)
     st["services"] = services
@@ -132,10 +136,9 @@ def picked_service(update: Update, context: CallbackContext):
     st = get_user_state(context)
     pair = next(((lab, val) for lab, val in st.get("services", []) if lab == label), None)
     if not pair:
-        update.message.reply_text("Խնդրում եմ ընտրել ցուցակից։")
+        update.message.reply_text("Խնդրում ենք ընտրել ցուցակից։")
         return SEARCH_SERVICE
     st["chosen"]["service_label"], st["chosen"]["service_id"] = pair
-    # ask branch
     branches: List[Tuple[str, str]] = st.get("branches", [])
     update.message.reply_text("Ընտրեք բաժանմունքը․", reply_markup=keyboards.list_keyboard_from_pairs(branches, cols=1))
     return SEARCH_BRANCH
@@ -145,7 +148,7 @@ def picked_branch(update: Update, context: CallbackContext):
     st = get_user_state(context)
     pair = next(((lab, val) for lab, val in st.get("branches", []) if lab == label), None)
     if not pair:
-        update.message.reply_text("Խնդրում եմ ընտրել ցուցակից։")
+        update.message.reply_text("Խնդրում ենք ընտրել ցուցակից։")
         return SEARCH_BRANCH
     st["chosen"]["branch_label"], st["chosen"]["branch_id"] = pair
     update.message.reply_text("Ընտրեք ֆիլտրի տարբերակը․", reply_markup=keyboards.filter_keyboard())
@@ -170,7 +173,7 @@ def picked_filter(update: Update, context: CallbackContext):
     elif choice == "Բոլոր ազատ օրերը":
         return do_all_days(update, context)
     else:
-        update.message.reply_text("Խնդրում եմ ընտրել հասանելի տարբերակներից։")
+        update.message.reply_text("Խնդրում ենք ընտրել հասանելի տարբերակներից։")
         return SEARCH_FILTER
 
 def do_nearest(update: Update, context: CallbackContext):
@@ -186,21 +189,15 @@ def do_nearest(update: Update, context: CallbackContext):
         return ConversationHandler.END
     context.user_data["last_nearest"] = day
     st["chosen"]["date"] = day
-    update.message.reply_text(f"Ամենամոտ օրը՝ {day}\nԸնտրեք ժամերը՝",
-                              reply_markup=None)
     if not slots:
-        # fetch slots for that day explicitly
         slots = scraper.slots_for_day(sess, branch_id, service_id, day)
     if slots:
         st["chosen"]["slots"] = slots
-        update.message.reply_text("Հասանելի ժամեր․", reply_markup=None)
-        update.message.reply_text(
-            "Ընտրեք ժամ (սեղմեք կոճակը).",
-            reply_markup=keyboards.slot_inline_keyboard(slots)
-        )
+        update.message.reply_text(f"Ամենամոտ օրը՝ {day}\nԸնտրեք ժամերից մեկը՝",
+                                  reply_markup=keyboards.slot_inline_keyboard(slots))
         return WAIT_SLOT_SELECT
     else:
-        update.message.reply_text("Տվյալ օրվա համար ժամեր չկան։")
+        update.message.reply_text(f"Օր՝ {day}\nՍակայն տվյալ օրվա համար ժամեր չկան։")
         return ConversationHandler.END
 
 def do_all_days(update: Update, context: CallbackContext):
@@ -209,15 +206,12 @@ def do_all_days(update: Update, context: CallbackContext):
     branch_id = st["chosen"]["branch_id"]
     service_id = st["chosen"]["service_id"]
     sess, _ = get_session_for_user(user_id)
-
-    # օգտագործենք ամսվա disabled օրերը՝ candidate օրերը ստանալու համար
-    from datetime import date
     today = date.today()
     base = f"{today.day:02d}-{today.month:02d}-{today.year}"
     disabled = scraper.slots_for_month(sess, branch_id, service_id, base)
     save_session_cookies(user_id, sess)
-    update.message.reply_text(f"Անաշխատ օրեր (ամսային ցուցակից): {', '.join(disabled) if disabled else '—'}\n"
-                              f"Օգտվեք «Ըստ ամսաթվի» կամ «Ամենամոտ օր»՝ կոնկրետ օր/ժամ տեսնելու համար։")
+    txt = "Անաշխատ օրեր (ամսային ցուցակից)՝ " + (", ".join(disabled) if disabled else "—")
+    update.message.reply_text(txt)
     return ConversationHandler.END
 
 def got_date(update: Update, context: CallbackContext):
@@ -237,33 +231,37 @@ def got_date(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 def got_hour(update: Update, context: CallbackContext):
+    # պարզ տարբերակ՝ առաջին մոտ օրվա մեջ փնտրել այդ ժամը
     hr = update.message.text.strip()
     st = get_user_state(context)
     st["chosen"]["hour"] = hr
-    # we still need a day; suggest nearest
     return do_nearest(update, context)
 
 def got_weekday(update: Update, context: CallbackContext):
-    wd = update.message.text.strip()
-    # simple approach: fetch nearest day, user can refine
+    # պարզեցված՝ առաջարկում ենք ամենամոտ օրը
     return do_nearest(update, context)
 
 def slot_clicked(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     data = query.data
-    if not data.startswith("slot|"):
-        if data == "follow|on":
-            return enable_follow(update, context)
-        elif data == "cancel":
-            query.edit_message_text("Չեղարկվեց.")
-            return ConversationHandler.END
+    if data.startswith("slot|"):
+        slot_value = data.split("|", 1)[1]
+        st = get_user_state(context)
+        st["chosen"]["slot_time"] = slot_value
+        query.edit_message_text(f"Ընտրված ժամ՝ {slot_value}\nՄուտքագրեք Ձեր email-ը ամրագրման համար։")
+        return ASK_EMAIL
+    elif data.startswith("follow|on"):
+        st = get_user_state(context)
+        user_id = update.effective_user.id
+        db.upsert_tracker(user_id, st["chosen"]["service_id"], st["chosen"]["branch_id"],
+                          last_best_date=context.user_data.get("last_nearest"))
+        query.edit_message_text("🔔 Հետևումը միացված է։")
         return ConversationHandler.END
-    slot_value = data.split("|", 1)[1]
-    st = get_user_state(context)
-    st["chosen"]["slot_time"] = slot_value
-    query.edit_message_text(f"Ընտրված ժամ՝ {slot_value}\nՄուտքագրեք Ձեր email-ը ամրագրման համար։")
-    return ASK_EMAIL
+    elif data == "cancel":
+        query.edit_message_text("Չեղարկվեց։")
+        return ConversationHandler.END
+    return ConversationHandler.END
 
 def ask_email_done(update: Update, context: CallbackContext):
     email = update.message.text.strip()
@@ -281,8 +279,7 @@ def ask_email_done(update: Update, context: CallbackContext):
                                email)
         save_session_cookies(user_id, sess)
         pin = res.get("pin") or "—"
-        update.message.reply_text(f"✅ Գրանցումն επιτυχία\nPIN: {pin}")
-        # առաջարկել հետևում
+        update.message.reply_text(f"✅ Գրանցումն ավարտվեց\nPIN: {pin}")
         update.message.reply_text("Սկսե՞լ հետևել ամենամոտ օրվան այս բաժնի/ծառայության համար:",
                                   reply_markup=keyboards.confirm_follow_keyboard())
         return WAIT_SLOT_SELECT
@@ -290,45 +287,44 @@ def ask_email_done(update: Update, context: CallbackContext):
         update.message.reply_text(f"❌ Չհաջողվեց գրանցումը. {e}")
         return ConversationHandler.END
 
-def enable_follow(update: Update, context: CallbackContext):
-    query = update.callback_query
-    query.answer()
-    st = get_user_state(context)
-    user_id = update.effective_user.id
-    db.upsert_tracker(user_id, st["chosen"]["service_id"], st["chosen"]["branch_id"], last_best_date=context.user_data.get("last_nearest"))
-    query.edit_message_text("🔔 Following միացված է։ Կտեղեկացնենք, երբ գտնվի ավելի մոտ օր։")
-    return ConversationHandler.END
-
-# ======== tracking job ========
-def check_trackers_job(context: CallbackContext):
-    job = context.job
-    # iterate all users who have trackers
-    # պարզ տարբերակ՝ մենք չենք քաշում բոլոր user-ների ցուցակը; այստեղ կապահովենք per-chat run
-    # practically, կկանչվի updater.job_queue.run_repeating գլոբալ; կստուգենք միայն այդ chat-ի
-    # իրականում, կանցնենք known chats-ից: պահենք memory-ում enabled tracker-ներ per run?
-    # Այստեղ՝ պարզ տարբերակ՝ ոչինչ չենք անում; իրական աշխատանքը կարվի /follow միացնելու պահին
-    pass
-
-# Globally check all trackers per interval (single job):
-def global_tracker_poll(context: CallbackContext):
-    logger.info("Tracker poll tick")
-    # This needs a list of trackers. For simplicity we fetch all enabled trackers per user we know.
-    # If you want fully global polling, create a service endpoint or store list of user ids.
-    # Here, we can't list users without an index; so skip.
-    # You can extend by adding a 'list users' RPC on Supabase or a view.
-    # Minimal working solution: tracking is user-initiated; polling could be triggered by /follow-start in a real app.
+# ======== tracking (global) ========
+def tracker_poll(context: CallbackContext):
+    try:
+        trackers = db.get_all_trackers()
+        if not trackers:
+            return
+        bot = context.bot
+        for t in trackers:
+            user_id = t.get("user_id")
+            branch_id = t.get("branch_id")
+            service_id = t.get("service_id")
+            last = t.get("last_best_date")
+            if not (user_id and branch_id and service_id):
+                continue
+            sess, _ = get_session_for_user(user_id)
+            day, slots = scraper.nearest_day(sess, branch_id, service_id, "")
+            save_session_cookies(user_id, sess)
+            if day and (last is None or day < last):
+                # found closer day
+                msg = f"🔔 Գտնվեց ավելի մոտ օր՝ {day} ({t.get('branch_id')})\n/search հրամանով կարող եք ամրագրել։"
+                try:
+                    bot.send_message(chat_id=user_id, text=msg)
+                except Exception:
+                    pass
+                db.update_tracker_last_date(user_id, service_id, branch_id, day)
+    except Exception as e:
+        logger.warning("tracker_poll error: %s", e)
 
 # ======== cancel ========
 def cancel(update: Update, context: CallbackContext):
     update.message.reply_text("Գործողությունը դադարեցվեց։")
     return ConversationHandler.END
 
-# ======== main ========
 def main():
     updater = Updater(token=config.BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
+    dp.add_error_handler(error_handler)
 
-    # /start conversation
     start_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -340,7 +336,6 @@ def main():
     )
     dp.add_handler(start_conv)
 
-    # /search conversation
     search_conv = ConversationHandler(
         entry_points=[CommandHandler("search", search_cmd)],
         states={
@@ -359,14 +354,18 @@ def main():
     )
     dp.add_handler(search_conv)
 
-    # also handle inline callbacks from final step (follow/cancel)
-    dp.add_handler(CallbackQueryHandler(slot_clicked, pattern="^(slot|follow|cancel)\\|?"))
+    # periodic tracker poll
+    updater.job_queue.run_repeating(tracker_poll, interval=config.TRACK_INTERVAL_MINUTES * 60, first=60)
 
-    # tracking job (placeholder global)
-    updater.job_queue.run_repeating(global_tracker_poll, interval=config.TRACK_INTERVAL_MINUTES * 60, first=60)
-
-    logger.info("Bot started (polling)")
-    updater.start_polling(clean=True)
+    # --- Webhook mode for Render Free Web Service ---
+    webhook_path = config.BOT_TOKEN  # obscure path
+    updater.start_webhook(
+        listen="0.0.0.0",
+        port=config.PORT,
+        url_path=webhook_path,
+        webhook_url=f"{config.WEBHOOK_BASE_URL.rstrip('/')}/{webhook_path}",
+    )
+    logger.info("Bot started via webhook on port %s", config.PORT)
     updater.idle()
 
 if __name__ == "__main__":
