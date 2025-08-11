@@ -1,43 +1,36 @@
 #!/usr/bin/env bash
-# exit on error
 set -o errexit
 
-# Directory for cached binaries on Render
-STORAGE_DIR=/opt/render/project/.render
+STORAGE=/opt/render/project/.render
 
-# Install Chrome if not cached
-if [[ ! -d $STORAGE_DIR/chrome ]]; then
-  echo "Downloading and installing Google Chrome..."
-  mkdir -p $STORAGE_DIR/chrome
-  cd $STORAGE_DIR/chrome
+# Install Google Chrome (cached)
+if [[ ! -d "$STORAGE/chrome" ]]; then
+  echo "Downloading Chrome..."
+  mkdir -p "$STORAGE/chrome"
+  cd "$STORAGE/chrome"
   wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-  dpkg -x google-chrome-stable_current_amd64.deb $STORAGE_DIR/chrome  # extract without root
-  rm google-chrome-stable_current_amd64.deb
-  cd $HOME/project/src  # return to project directory
+  dpkg -x google-chrome-stable_current_amd64.deb "$STORAGE/chrome"
+  rm -f google-chrome-stable_current_amd64.deb
+  cd - >/dev/null
 else
-  echo "Chrome is cached, using existing binary."
+  echo "Chrome cached."
 fi
 
-# Install ChromeDriver if not cached
-if [[ ! -f $STORAGE_DIR/chromedriver/chromedriver ]]; then
+# Install Chromedriver (cached) — pick a recent version compatible with Chrome
+if [[ ! -f "$STORAGE/chromedriver/chromedriver" ]]; then
   echo "Downloading Chromedriver..."
-  mkdir -p $STORAGE_DIR/chromedriver
-  cd $STORAGE_DIR/chromedriver
-  # Use a ChromeDriver version matching the Chrome version installed.
-  # The URL below should be updated to match the Chrome stable version.
+  mkdir -p "$STORAGE/chromedriver"
+  cd "$STORAGE/chromedriver"
+  # You may update the version below if Chrome updates:
   wget -q https://storage.googleapis.com/chrome-for-testing-public/124.0.6367.78/linux64/chromedriver-linux64.zip
   unzip -q chromedriver-linux64.zip
   mv chromedriver-linux64/chromedriver .
   rm -rf chromedriver-linux64 chromedriver-linux64.zip
-  cd $HOME/project/src
+  chmod +x chromedriver
+  cd - >/dev/null
 else
-  echo "Chromedriver is cached, using existing binary."
+  echo "Chromedriver cached."
 fi
 
-# (Optional) Check Chrome version for debugging
-$STORAGE_DIR/chrome/opt/google/chrome/google-chrome --version || true
-
-# Install Python dependencies
+# Python deps
 pip install -r requirements.txt
-
-# Note: Chrome's binary path will be added to PATH in the start command (see start.sh).
