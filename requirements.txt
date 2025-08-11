@@ -1,3 +1,2 @@
 python-telegram-bot[job-queue]==20.7
-beautifulsoup4
-requests
+selenium==4.10.0
