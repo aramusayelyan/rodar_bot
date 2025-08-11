@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Add Chrome and Chromedriver to PATH
+set -o errexit
+
+# Put Chrome & Chromedriver on PATH so Selenium finds them
 export PATH="$PATH:/opt/render/project/.render/chrome/opt/google/chrome:/opt/render/project/.render/chromedriver"
-# Run the Telegram bot
+
+# Run bot
 python main.py
