@@ -2,37 +2,42 @@
 # exit on error
 set -o errexit
 
+# Directory for cached binaries on Render
 STORAGE_DIR=/opt/render/project/.render
 
-# Install Google Chrome to cached directory if not present
+# Install Chrome if not cached
 if [[ ! -d $STORAGE_DIR/chrome ]]; then
-  echo "Downloading Chrome..."
+  echo "Downloading and installing Google Chrome..."
   mkdir -p $STORAGE_DIR/chrome
   cd $STORAGE_DIR/chrome
-  wget -q -O chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-  dpkg -x chrome.deb $STORAGE_DIR/chrome
-  rm chrome.deb
-  cd - > /dev/null
+  wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  dpkg -x google-chrome-stable_current_amd64.deb $STORAGE_DIR/chrome  # extract without root
+  rm google-chrome-stable_current_amd64.deb
+  cd $HOME/project/src  # return to project directory
 else
-  echo "Chrome is cached."
+  echo "Chrome is cached, using existing binary."
 fi
 
-# Install ChromeDriver to cached directory if not present
-if [[ ! -d $STORAGE_DIR/chromedriver ]]; then
-  echo "Downloading ChromeDriver..."
+# Install ChromeDriver if not cached
+if [[ ! -f $STORAGE_DIR/chromedriver/chromedriver ]]; then
+  echo "Downloading Chromedriver..."
   mkdir -p $STORAGE_DIR/chromedriver
-  # Get latest stable ChromeDriver version
-  LATEST_CHROMEDRIVER=$(wget -q -O - https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
-  wget -q -O $STORAGE_DIR/chromedriver/chromedriver_linux64.zip "https://chromedriver.storage.googleapis.com/${LATEST_CHROMEDRIVER}/chromedriver_linux64.zip"
-  # Install unzip if not already available
-  apt-get update && apt-get install -y unzip >/dev/null
-  unzip $STORAGE_DIR/chromedriver/chromedriver_linux64.zip -d $STORAGE_DIR/chromedriver
-  rm $STORAGE_DIR/chromedriver/chromedriver_linux64.zip
-  # Ensure chromedriver binary is executable
-  chmod +x $STORAGE_DIR/chromedriver/chromedriver
+  cd $STORAGE_DIR/chromedriver
+  # Use a ChromeDriver version matching the Chrome version installed.
+  # The URL below should be updated to match the Chrome stable version.
+  wget -q https://storage.googleapis.com/chrome-for-testing-public/124.0.6367.78/linux64/chromedriver-linux64.zip
+  unzip -q chromedriver-linux64.zip
+  mv chromedriver-linux64/chromedriver .
+  rm -rf chromedriver-linux64 chromedriver-linux64.zip
+  cd $HOME/project/src
 else
-  echo "ChromeDriver is cached."
+  echo "Chromedriver is cached, using existing binary."
 fi
+
+# (Optional) Check Chrome version for debugging
+$STORAGE_DIR/chrome/opt/google/chrome/google-chrome --version || true
 
 # Install Python dependencies
 pip install -r requirements.txt
+
+# Note: Chrome's binary path will be added to PATH in the start command (see start.sh).
