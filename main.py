@@ -1,184 +1,307 @@
-#!/usr/bin/env python3
-import logging
-import os
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, CallbackContext, filters
-import config
-import keyboards
-import scraper
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+from config import TOKEN
+from keyboards import branch_keyboard, exam_keyboard, filter_keyboard, weekday_keyboard, contact_request_keyboard
+from scraper import get_available_slots
 
-# Define conversation state constants
-PHONE, BRANCH, EXAM_TYPE, FILTER_METHOD, FILTER_VALUE = range(5)
+# Define conversation states
+PHONE, BRANCH, EXAM, FILTER, WEEKDAY, DATE_INPUT, HOUR_INPUT = range(7)
 
-async def start(update: Update, context: CallbackContext) -> int:
-    # Send greeting and ask for phone number
-    contact_button = KeyboardButton("📱 Ուղարկել հեռախոսահամարս", request_contact=True)
-    reply_markup = ReplyKeyboardMarkup([[contact_button]], one_time_keyboard=True, resize_keyboard=True)
-    await update.message.reply_text(
-        f"Բարի օր, {update.effective_user.first_name or 'Օգտագործող'}։\n"
-        "Խնդրում եմ կիսվել Ձեր հեռախոսահամարով՝ շարունակելու համար։",
-        reply_markup=reply_markup
-    )
-    return PHONE
+# Start command handler
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /start command: ask for phone if not provided, else jump to branch selection."""
+    user = update.effective_user
+    # Greet the user
+    await update.message.reply_text(f"Բարի գալուստ, {user.first_name}։\n")
+    # Check if we already have the phone number for this user
+    if context.user_data.get("phone"):
+        # Phone is already stored; skip asking again
+        await update.message.reply_text(
+            "Անձնական հեռախոսահամարը արդեն պահպանված է։",
+        )
+        # Proceed to branch selection
+        await update.message.reply_text(
+            "Խնդրում ենք ընտրել մասնաճյուղը․",
+            reply_markup=branch_keyboard()
+        )
+        return BRANCH
+    else:
+        # Request contact (phone number) from the user
+        await update.message.reply_text(
+            "Խնդրում ենք կիսվել ձեր հեռախոսահամարով՝ սկսելուն համապատասխան.",
+            reply_markup=contact_request_keyboard
+        )
+        # Next state will be PHONE, expecting contact
+        return PHONE
 
-
-def handle_contact(update: Update, context: CallbackContext):
-    """Receive user's contact (phone number) and proceed to ask for branch."""
+# Handler for receiving contact (phone number)
+async def phone_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store the received phone number and ask for branch selection."""
     contact = update.message.contact
-    # We have the phone number (contact.phone_number) if needed for verification
-    # Proceed to ask branch selection
-    reply_markup = keyboards.branch_markup
-    update.message.reply_text(
-        "Շնորհակալություն։ Հիմա ընտրեք հաշվառման-քննական բաժանմունքը։",
-        reply_markup=reply_markup
+    if contact is None:
+        # User did not share contact, prompt again or allow manual entry
+        await update.message.reply_text("Խնդրում ենք ուղարկել ձեր հեռախոսահամարը։")
+        return PHONE
+    # Store phone number
+    context.user_data["phone"] = contact.phone_number
+    # Acknowledge and proceed
+    await update.message.reply_text("Շնորհակալություն։ Ձեր հեռախոսահամարը պահպանված է։")
+    # Ask for branch selection
+    await update.message.reply_text(
+        "Խնդրում ենք ընտրել քննության անցկացման բաժինը․",
+        reply_markup=branch_keyboard()
     )
     return BRANCH
 
-def handle_branch(update: Update, context: CallbackContext):
-    """Handle branch selection, ask for exam type."""
-    branch = update.message.text
-    context.user_data["branch"] = branch
-    # Ask for exam type
-    reply_markup = keyboards.exam_type_markup
-    update.message.reply_text(
-        "Ընտրեք քննության տեսակը։",
-        reply_markup=reply_markup
-    )
-    return EXAM_TYPE
-
-def handle_exam_type(update: Update, context: CallbackContext):
-    """Handle exam type selection, ask for filter method."""
-    exam_type = update.message.text
-    # Strip the word "քննություն" if present for internal use
-    if exam_type.endswith("քննություն"):
-        exam_type = exam_type.replace(" քննություն", "")
-    context.user_data["exam_type"] = exam_type
-    # Ask for filter method
-    reply_markup = keyboards.filter_method_markup
-    update.message.reply_text(
-        "Ընտրեք ազատ ժամանակների ֆիլտրի տարբերակը։",
-        reply_markup=reply_markup
-    )
-    return FILTER_METHOD
-
-def handle_filter_method(update: Update, context: CallbackContext):
-    """Handle filter method choice, possibly ask for further filter detail or fetch results."""
-    choice = update.message.text
-    choice = choice.strip()
-    # Determine which filter user chose
-    if choice.startswith("Բոլոր"):
-        # No filtering - fetch all slots
-        branch = context.user_data["branch"]
-        exam_type = context.user_data["exam_type"]
-        result_text = scraper.fetch_available_slots(branch, exam_type)
-        # If no slots found, scraper should return appropriate message
-        update.message.reply_text(result_text or "Ազատ ժամեր չեն գտնվել։")
+# Handler for branch selection (callback query from inline keyboard)
+async def branch_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store selected branch and ask for exam type."""
+    query = update.callback_query
+    await query.answer()  # acknowledge the callback
+    data = query.data  # e.g. "branch:33"
+    # Parse branch ID
+    try:
+        branch_id = int(data.split(":")[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text("Կատարվել է սխալ մասնաճյուղի ընտրության մեջ։ Խնդրում ենք կրկին փորձել։")
         return ConversationHandler.END
-    elif "շաբաթվա" in choice:
-        context.user_data["filter_type"] = "weekday"
-        # Ask which weekday
-        reply_markup = keyboards.weekdays_markup
-        update.message.reply_text(
-            "Ընտրեք շաբաթվա օրը (Երկուշաբթի - Կիրակի)։",
-            reply_markup=reply_markup
-        )
-        return FILTER_VALUE
-    elif "ամսաթվի" in choice:
-        context.user_data["filter_type"] = "date"
-        update.message.reply_text(
-            "Մուտքագրեք ցանկալի ամսաթիվը ֆորմատով ՕՕ.ԱԱԱԱ (օրինակ՝ 15.09.2025):",
-            reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True, one_time_keyboard=True)
-        )
-        return FILTER_VALUE
-    elif "ժամի" in choice:
-        context.user_data["filter_type"] = "hour"
-        update.message.reply_text(
-            "Մուտքագրեք ցանկալի ժամը ֆորմատով ԺԺ:ՐՐ (օրինակ՝ 09:00):",
-            reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True, one_time_keyboard=True)
-        )
-        return FILTER_VALUE
-    else:
-        # Unknown choice, ask again
-        update.message.reply_text("Խնդրում եմเลือก մատչելի տարբերակներից։")
-        return FILTER_METHOD
+    # Store branch selection
+    context.user_data["branch_id"] = branch_id
+    # Retrieve branch name for confirmation (find in BRANCHES list)
+    branch_name = next((name for name, bid in context.bot_data.get("branches_list", []) if bid == branch_id), None)
+    if not branch_name:
+        # If not stored in bot_data, try to get from keyboards list
+        for name, bid in context.bot_data.get("branches_list", []):
+            if bid == branch_id:
+                branch_name = name
+                break
+    if not branch_name:
+        branch_name = "Ընտրված մասնաճյուղ"
+    # Acknowledge selection
+    await query.edit_message_text(f"Ընտրված մասնաճյուղը՝ {branch_name}։")
+    # Ask for exam type
+    await query.edit_message_text(
+        f"{branch_name} - Խնդրում ենք ընտրել քննության տեսակը․",
+        reply_markup=exam_keyboard()
+    )
+    return EXAM
 
-def handle_filter_value(update: Update, context: CallbackContext):
-    """Handle the specific filter value (weekday/date/hour) from user and fetch results."""
-    filter_type = context.user_data.get("filter_type")
-    user_input = update.message.text.strip()
-    branch = context.user_data["branch"]
-    exam_type = context.user_data["exam_type"]
-    # Initialize filter parameters for scraper
-    weekday = None
-    date = None
-    hour = None
+# Handler for exam type selection
+async def exam_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store exam type and ask for filter options."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data  # e.g. "exam:300691"
+    try:
+        service_id = int(data.split(":")[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text("Սխալ քննության տեսակ։ Խնդրում ենք սկսել սկզբից։")
+        return ConversationHandler.END
+    context.user_data["service_id"] = service_id
+    exam_name = "տեսական" if service_id == 300691 else "գործնական"
+    # Confirm the choice
+    await query.edit_message_text(f"Ընտրված քննության տեսակը՝ { 'Տեսական' if service_id==300691 else 'Գործնական' }։")
+    # Ask for filter option
+    await query.edit_message_text(
+        "Ինչպե՞ս եք ցանկանում դիտել ազատ ժամանակները։ Ընտրեք ֆիլտրի տարբերակը․",
+        reply_markup=filter_keyboard()
+    )
+    return FILTER
+
+# Handler for filter selection
+async def filter_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the filter type selection and either ask for further detail or fetch slots."""
+    query = update.callback_query
+    await query.answer()
+    choice = query.data.split(":")[1]  # "weekday", "date", "hour", or "all"
+    context.user_data["filter"] = choice
+    if choice == "weekday":
+        # Ask which weekday
+        await query.edit_message_text("Խնդրում ենք ընտրել շաբաթվա օրը․", reply_markup=weekday_keyboard())
+        return WEEKDAY
+    elif choice == "date":
+        # Ask user to type a specific date
+        await query.edit_message_text("Խնդրում եմ մուտքագրել ամսաթիվը (օր.` 25.12.2025 ):")
+        return DATE_INPUT
+    elif choice == "hour":
+        # Ask user to provide hour
+        await query.edit_message_text("Խնդրում եմ մուտքագրել ժամը (0-23 միջակայքում, օրինակ՝ 9 կամ 15)՝:")
+        return HOUR_INPUT
+    elif choice == "all":
+        # No further input needed, we can fetch all available slots
+        # But we must edit message to remove inline buttons
+        await query.edit_message_text("Բոլոր առկա ազատ ժամերը ստուգվում են․․․")
+        # Proceed to fetch data
+        return await fetch_and_send_slots(update, context)
+    else:
+        # Unknown filter option
+        await query.edit_message_text("Անհայտ ընտրություն։ Սկսեք սկզբից /start հրամանով։")
+        return ConversationHandler.END
+
+# Handler for weekday selection
+async def weekday_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store selected weekday and fetch slots filtered by that weekday."""
+    query = update.callback_query
+    await query.answer()
+    try:
+        weekday_index = int(query.data.split(":")[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text("Սխալ շաբաթվա օր։")
+        return ConversationHandler.END
+    context.user_data["weekday_index"] = weekday_index
+    # Acknowledge weekday choice
+    weekday_name = ["Երկուշաբթի","Երեքշաբթի","Չորեքշաբթի","Հինգշաբթի","Ուրբաթ","Շաբաթ","Կիրակի"][weekday_index]
+    await query.edit_message_text(f"Ընտրված շաբաթվա օրը՝ {weekday_name}։ Ազատ ժամերի ստուգում․․․")
+    # Proceed to fetch data
+    return await fetch_and_send_slots(update, context)
+
+# Handler for date input
+async def date_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Parse the entered date and fetch slots for that date."""
+    text = update.message.text.strip()
+    # Expecting format DD.MM.YYYY
+    try:
+        day, month, year = map(int, text.replace("/", ".").split("."))
+        query_date = datetime(year, month, day).date()
+    except Exception as e:
+        await update.message.reply_text("Խնդրում ենք մուտքագրել ամսաթիվը ճիշտ ձևաչափով (օր. 05.09.2025):")
+        return DATE_INPUT
+    context.user_data["query_date"] = query_date
+    await update.message.reply_text(f"Ընտրված ամսաթիվը՝ {query_date.strftime('%d.%m.%Y')}։ Ստուգվում է առկայությունը․․․")
+    # Proceed to fetch data
+    return await fetch_and_send_slots(update, context)
+
+# Handler for hour input
+async def hour_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Store the hour filter and fetch slots at that hour."""
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text("Խնդրում ենք մուտքագրել ժամը՝ թվով (օր. 9 կամ 15):")
+        return HOUR_INPUT
+    hour = int(text)
+    if hour < 0 or hour > 23:
+        await update.message.reply_text("Ժամը պետք է լինի 0-23 միջակայքում։ Խնդրում ենք կրկին փորձել:")
+        return HOUR_INPUT
+    context.user_data["hour"] = hour
+    await update.message.reply_text(f"Ընտրված ժամը՝ {hour}:00-ի միջակայք։ Ստուգվում է ազատ ժամերը․․․")
+    # Proceed to fetch data
+    return await fetch_and_send_slots(update, context)
+
+# Function to fetch slots using scraper and send the result message
+async def fetch_and_send_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Fetch available slots based on stored user criteria and send the result message."""
+    # Get stored selections
+    branch_id = context.user_data.get("branch_id")
+    service_id = context.user_data.get("service_id")
+    filter_type = context.user_data.get("filter")
+    if not branch_id or not service_id:
+        # Something went wrong; end conversation
+        await update.callback_query.edit_message_text("Տեղի ունեցավ սխալ։ Խնդրում ենք սկսել սկզբից։")
+        return ConversationHandler.END
+    # Fetch all available slots for that branch & service
+    slots = get_available_slots(branch_id, service_id)
+    # Filter the slots as per user's choice
     if filter_type == "weekday":
-        # Map Armenian weekday name to number 0-6 (Monday=0, Sunday=6)
-        weekdays_map = {
-            "Երկուշաբթի": 0,
-            "Երեքշաբթի": 1,
-            "Չորեքշաբթի": 2,
-            "Հինգշաբթի": 3,
-            "Ուրբաթ": 4,
-            "Շաբաթ": 5,
-            "Կիրակի": 6
-        }
-        if user_input not in weekdays_map:
-            update.message.reply_text("Խնդրում ենք ընտրել շաբաթվա օրվա անվանումը տրված ցուցակից։")
-            return FILTER_VALUE
-        weekday = weekdays_map[user_input]
+        idx = context.user_data.get("weekday_index")
+        if idx is not None:
+            slots = [slot for slot in slots if slot[0].weekday() == idx]
     elif filter_type == "date":
-        # Expect format dd.mm.yyyy
-        try:
-            parts = user_input.split(".")
-            if len(parts) != 3:
-                raise ValueError
-            day = int(parts[0]); month = int(parts[1]); year = int(parts[2])
-            date = f"{parts[0].zfill(2)}.{parts[1].zfill(2)}.{parts[2]}"
-        except Exception as e:
-            update.message.reply_text("Խնդրում էք մուտքագրել ամսաթիվը ճիշտ ֆորմատով (օրինակ՝ 05.10.2025):")
-            return FILTER_VALUE
+        q_date = context.user_data.get("query_date")
+        if q_date:
+            slots = [slot for slot in slots if slot[0] == q_date]
     elif filter_type == "hour":
-        # Expect format HH:MM
-        if not (len(user_input) == 5 and user_input[2] == ':' and user_input[:2].isdigit() and user_input[3:].isdigit()):
-            update.message.reply_text("Խնդրում ենք մուտքագրել ժամը ճիշտ ֆորմատով (օրինակ՝ 09:30):")
-            return FILTER_VALUE
-        hour = user_input
-    # Fetch and format results with the given filters
-    result_text = scraper.fetch_available_slots(branch, exam_type, weekday=weekday, specific_date=date, specific_hour=hour)
-    if not result_text:
-        result_text = "Նման ֆիլտրով համապատասխան ազատ ժամանակներ չեն գտնվել։"
-    update.message.reply_text(result_text)
+        hr = context.user_data.get("hour")
+        if hr is not None:
+            slots = [slot for slot in slots if int(slot[1].split(":")[0]) == hr]
+    # Prepare message with results
+    if not slots:
+        msg = "Ցավոք, տվյալ հարցմամբ ազատ ժամանակներ չեն գտնվել։"
+    else:
+        # Format the list of slots
+        lines = []
+        # Optionally, include the branch and exam info in header
+        branch_name = next((name for name, bid in context.bot_data.get("branches_list", []) if bid == branch_id), "")
+        exam_name = "տեսական" if service_id == 300691 else "գործնական"
+        header = f"Ազատ ժամեր {branch_name} բաժնում ({'տեսական' if service_id==300691 else 'գործնական'} քննություն):\n"
+        lines.append(header)
+        for date_obj, time_str in slots:
+            # Format date as DD MonthName YYYY in Armenian
+            month_names = ["Հունվար","Փետրվար","Մարտ","Ապրիլ","Մայիս","Հունիս",
+                           "Հուլիս","Օգոստոս","Սեպտեմբեր","Հոկտեմբեր","Նոյեմբեր","Դեկտեմբեր"]
+            day = date_obj.day
+            month_name = month_names[date_obj.month - 1]
+            year = date_obj.year
+            lines.append(f" - {day} {month_name} {year}, ժամը {time_str}")
+        msg = "\n".join(lines)
+    # Send the message to user
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg)
+    else:
+        await update.message.reply_text(msg)
+    # End of conversation
     return ConversationHandler.END
 
-def cancel(update: Update, context: CallbackContext):
-    """Allow user to cancel the conversation."""
-    update.message.reply_text("Գործընթացը դադարեցվեց։")
+# Handler to cancel the conversation (optional)
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Գործողությունը չեղարկված է։")
     return ConversationHandler.END
 
 def main():
-    application = Application.builder().token(config.TELEGRAM_TOKEN).build()
-    # Define conversation handler with states
+    application = Application.builder().token(TOKEN).build()
+    # Save branch list in bot_data for lookup (for names in messages)
+    application.bot_data["branches_list"] = [(name, bid) for name, bid in BRANCHES]  # from keyboards.py BRANCHES
+    
+    # Set up conversation handler with states and handlers
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            PHONE: [MessageHandler(filters.CONTACT, handle_contact)],
-            BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_branch)],
-            EXAM_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exam_type)],
-            FILTER_METHOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_method)],
-            FILTER_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_filter_value)],
+            PHONE: [MessageHandler(filters.CONTACT, phone_received)],
+            BRANCH: [CallbackQueryHandler(branch_chosen, pattern="^branch:")],
+            EXAM: [CallbackQueryHandler(exam_chosen, pattern="^exam:")],
+            FILTER: [CallbackQueryHandler(filter_chosen, pattern="^filter:")],
+            WEEKDAY: [CallbackQueryHandler(weekday_selected, pattern="^weekday:")],
+            DATE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, date_entered)],
+            HOUR_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, hour_entered)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True
+        fallbacks=[CommandHandler("cancel", cancel)]
     )
     application.add_handler(conv_handler)
-    # Start the bot (polling)
-    application.run_polling(stop_signals=None)  # disable built-in signal handlers in Render environment
+    # Also add a direct command to check slots quickly
+    application.add_handler(CommandHandler("slots", 
+        lambda update, context: context.application.create_task(handle_slots_command(update, context))
+    ))
+    
+    # Start the bot
+    print("Bot is polling for updates...")
+    application.run_polling()
 
-if __name__ == "__main__":
-    main()
+# Direct /slots command handler (outside conversation)
+async def handle_slots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows user to fetch slots without repeating selections, using stored data."""
+    # If we have branch and service stored for this user, use them; otherwise prompt to use /start
+    if "branch_id" in context.user_data and "service_id" in context.user_data:
+        await update.message.reply_text("Վերջին պահպանված հարցումով ազատ ժամանակները բերվում են...")
+        # Use last filter if available, else default to all
+        # For simplicity, we'll just fetch all for last branch & exam
+        branch_id = context.user_data["branch_id"]
+        service_id = context.user_data["service_id"]
+        slots = get_available_slots(branch_id, service_id)
+        if not slots:
+            await update.message.reply_text("Այս պահին ազատ ժամանակներ չկան ձեր պահպանված հարցման համար։")
+        else:
+            lines = []
+            branch_name = next((name for name, bid in context.bot_data.get("branches_list", []) if bid == branch_id), "")
+            header = f"Ազատ ժամեր {branch_name} բաժնում ({'տեսական' if service_id==300691 else 'գործնական'} քննություն):\n"
+            lines.append(header)
+            for date_obj, time_str in slots:
+                month_names = ["Հունվար","Փետրվար","Մարտ","Ապրիլ","Մայիս","Հունիս",
+                               "Հուլիս","Օգոստոս","Սեպտեմբեր","Հոկտեմբեր","Նոյեմբեր","Դեկտեմբեր"]
+                day = date_obj.day
+                month_name = month_names[date_obj.month - 1]
+                year = date_obj.year
+                lines.append(f" - {day} {month_name} {year}, ժամը {time_str}")
+            msg = "\n".join(lines)
+            await update.message.reply_text(msg)
+    else:
+        await update.message.reply_text("Խնդրում ենք նախ սկսել /start հրամանով և կատարել ընտրությունները։")
