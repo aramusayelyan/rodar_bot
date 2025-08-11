@@ -1,102 +1,186 @@
-import logging
-from datetime import datetime
+# scraper.py
+import re
+import requests
+from datetime import datetime, timedelta
 
-# Սիմուլյացիայի համար պահվող գրանցումների OTP կոդերը (բազմակի գրանցման գործընթացների համար)
-_pending_registrations = {}
+# Dictionary to store active sessions per user
+sessions = {}
 
-def start_registration(phone_number, social_card):
-    """
-    Simulate initiating the registration on the government exam site.
-    Sends an SMS code to the user's phone (simulated by generating a code).
-    """
-    # Generate a 4-digit confirmation code (simulation)
-    code = str(1000 + __import__("random").randint(0, 8999))
-    # Store the code in pending dict
-    _pending_registrations[phone_number] = code
-    # Log the event (in real scenario, an SMS would be sent to user)
-    logging.info(f"Simulated registration: sent OTP code {code} to phone {phone_number}")
-    # Return success status
-    return True
+def get_session(user_id: int):
+    """Get or create a requests Session for a user."""
+    if user_id not in sessions:
+        sessions[user_id] = requests.Session()
+    return sessions[user_id]
 
-def complete_registration(phone_number, code_entered):
+def login_send_code(user_id: int, psn: str, phone: str) -> bool:
     """
-    Simulate completing the registration by verifying the SMS code.
-    In this simulation, any numeric code is accepted. If incorrect, it logs a warning.
+    Start the login process by sending an SMS code.
+    Returns True if code sent, False if failed.
     """
-    real_code = _pending_registrations.get(phone_number)
-    if real_code is None:
-        # No pending registration found for this phone (unexpected in normal flow)
-        logging.warning(f"No pending registration for phone {phone_number}")
+    sess = get_session(user_id)
+    # Get the homepage to obtain CSRF token and cookies
+    url_home = "https://roadpolice.am/hy"
+    res = sess.get(url_home)
+    if res.status_code != 200:
         return False
-    if code_entered != real_code:
-        # OTP is incorrect, but for demo purposes we will proceed anyway
-        logging.warning(f"Entered OTP {code_entered} does not match real OTP {real_code} (proceeding in demo mode).")
-    else:
-        logging.info(f"OTP {code_entered} verified successfully for phone {phone_number}.")
-    # Registration completed (simulate finalizing on external site)
-    _pending_registrations.pop(phone_number, None)  # remove pending entry
+    # Extract CSRF token from HTML
+    text = res.text
+    m = re.search(r'name="csrf-token" content="([^"]+)"', text)
+    if not m:
+        return False
+    csrf_token = m.group(1)
+    # Set CSRF header for subsequent requests
+    sess.headers.update({"X-CSRF-TOKEN": csrf_token, "X-Requested-With": "XMLHttpRequest"})
+    # Normalize phone number format (Armenian)
+    phone_digits = phone
+    if phone_digits.startswith('+'):
+        phone_digits = phone_digits[1:]
+    if phone_digits.startswith('0'):
+        phone_digits = '374' + phone_digits[1:]
+    # Data payload for requesting SMS code
+    data = {
+        "publicServiceNumber": psn,
+        "phoneNumber": phone_digits
+    }
+    # Send request to trigger SMS code
+    send_url = "https://roadpolice.am/hy/send-code"
+    res2 = sess.post(send_url, data=data)
+    if res2.status_code != 200:
+        return False
+    try:
+        resp_json = res2.json()
+        if isinstance(resp_json, dict) and resp_json.get("error"):
+            return False
+    except Exception:
+        pass
     return True
 
-def get_available_slots(exam_type, branch, filter_type=None, filter_value=None):
+def login_verify_code(user_id: int, psn: str, phone: str, code: str) -> bool:
     """
-    Fetch available exam slots (simulated data or real via scraping).
-    If filter_type is provided, filter the slots accordingly.
+    Complete login by verifying the SMS code.
+    Returns True if login successful, False otherwise.
     """
-    # Քանի որ իրական կայքի API-ն կամ տվյալները անմիջապես հասանելի չեն,
-    # այստեղ օգտագործվում է սիմուլյացված ժամանակացույց:
-    # Օրինակ՝ Selenium-ի կիրառման համար (եթե իրական scraping իրականացվեր), կոդը կերևար այսպես.
-    #
-    # from selenium import webdriver
-    # options = webdriver.ChromeOptions()
-    # options.headless = True
-    # driver = webdriver.Chrome(options=options)
-    # try:
-    #     driver.get("<booking_site_url>")
-    #     # Այստեղ կկատարվեին գործողություններ՝ ընտրելու exam_type և branch համապատասխան drop-down մենյուներից,
-    #     # այնուհետեւ կվերծանվեին ազատ ժամերը:
-    #     # ... (scraping logic) ...
-    # finally:
-    #     driver.quit()
-    #
-    # Ստացված տվյալները պէտք է մշակվեն և վերադարձվեն։
-    #
-    # Այժմ՝ սիմուլյացված տվյալներ.
-    slots = [
-        ("15.09.2025", "09:16"),
-        ("15.09.2025", "10:00"),
-        ("16.09.2025", "14:00"),
-        ("17.09.2025", "11:24"),
-        ("18.09.2025", "09:16"),
-        ("19.09.2025", "09:16"),
-        ("20.09.2025", "09:16")
-    ]
-    # Ֆիլտրել ըստ exam_type կամ branch, եթե անհրաժեշտ է։
-    # (Սիմուլյացիայում exam_type և branch չեն ազդում արդյունքների վրա)
-    filtered_slots = slots
+    sess = get_session(user_id)
+    # Prepare phone in same format as send_code
+    phone_digits = phone
+    if phone_digits.startswith('+'):
+        phone_digits = phone_digits[1:]
+    if phone_digits.startswith('0'):
+        phone_digits = '374' + phone_digits[1:]
+    data = {
+        "publicServiceNumber": psn,
+        "phoneNumber": phone_digits,
+        "smsCode": code
+    }
+    verify_url = "https://roadpolice.am/hy/verify-code"
+    res = sess.post(verify_url, data=data)
+    if res.status_code != 200:
+        return False
+    # Verify by checking if /hqb is accessible (which requires auth)
+    test_res = sess.get("https://roadpolice.am/hy/hqb")
+    if test_res.status_code != 200:
+        return False
+    return True
 
-    # Apply filter by type
-    if filter_type == "hour":
-        # Filter slots by hour (two-digit hour)
-        target_hour = filter_value.zfill(2)  # ensure two-digit string
-        filtered_slots = [s for s in filtered_slots if s[1].startswith(target_hour)]
-    elif filter_type == "date":
-        filtered_slots = [s for s in filtered_slots if s[0] == filter_value]
-    elif filter_type == "weekday":
-        # Convert Armenian weekday name to weekday number (0=Monday,6=Sunday)
-        weekdays_map = {
-            "Երկուշաբթի": 0, "Երեքշաբթի": 1, "Չորեքշաբթի": 2,
-            "Հինգշաբթի": 3, "Ուրբաթ": 4, "Շաբաթ": 5, "Կիրակի": 6
-        }
-        try:
-            weekday_num = weekdays_map[filter_value.capitalize()]
-        except KeyError:
-            weekday_num = None
-        if weekday_num is not None:
-            filtered_slots = [
-                s for s in filtered_slots 
-                if datetime.strptime(s[0], "%d.%m.%Y").weekday() == weekday_num
-            ]
-        else:
-            filtered_slots = []  # if invalid weekday (shouldn't happen due to prior validation)
-    # Return filtered list of (date, time) tuples
-    return filtered_slots
+def ensure_logged_in(user_id: int, cookies: dict) -> requests.Session:
+    """
+    Ensure the session for user is logged in (using stored cookies).
+    Returns a Session object if successful, otherwise raises Exception.
+    """
+    sess = get_session(user_id)
+    # Load cookies into session
+    sess.cookies.clear()
+    for name, value in cookies.items():
+        sess.cookies.set(name, value)
+    # Access a protected page to confirm login and refresh CSRF token
+    res = sess.get("https://roadpolice.am/hy/hqb")
+    if res.status_code != 200:
+        raise Exception("Session invalid or expired")
+    m = re.search(r'name="csrf-token" content="([^"]+)"', res.text)
+    if m:
+        csrf_token = m.group(1)
+        sess.headers.update({"X-CSRF-TOKEN": csrf_token, "X-Requested-With": "XMLHttpRequest"})
+    return sess
+
+def fetch_available_days(user_id: int, cookies: dict, branch_id: str, service_id: str, year: int, month: int):
+    """
+    Fetch available days in the given month that have at least one slot.
+    Returns a list of date strings 'YYYY-MM-DD' that have free slots.
+    """
+    sess = ensure_logged_in(user_id, cookies)
+    url = "https://roadpolice.am/hy/hqb-slots-for-month"
+    params = {"branchId": branch_id, "serviceId": service_id, "year": year, "month": month}
+    res = sess.get(url, params=params)
+    if res.status_code != 200:
+        raise Exception("Failed to fetch slots for month")
+    data = res.json()
+    available_days = []
+    if isinstance(data, list):
+        available_days = data
+    elif isinstance(data, dict):
+        if "freeDates" in data:
+            available_days = data["freeDates"]
+        elif "availableDates" in data:
+            available_days = data["availableDates"]
+        elif "busyDates" in data:
+            busy = set(data["busyDates"])
+            first_day = datetime(year, month, 1)
+            if month == 12:
+                next_month = datetime(year+1, 1, 1)
+            else:
+                next_month = datetime(year, month+1, 1)
+            last_day = next_month - timedelta(days=1)
+            date_iter = first_day
+            while date_iter <= last_day:
+                date_str = date_iter.strftime("%Y-%m-%d")
+                if date_str not in busy:
+                    available_days.append(date_str)
+                date_iter += timedelta(days=1)
+    return sorted(available_days)
+
+def fetch_available_times(user_id: int, cookies: dict, branch_id: str, service_id: str, date_str: str):
+    """
+    Fetch available time slots for a specific date.
+    Returns a list of time strings 'HH:MM' that are available.
+    """
+    sess = ensure_logged_in(user_id, cookies)
+    url = "https://roadpolice.am/hy/hqb-slots-for-day"
+    params = {"branchId": branch_id, "serviceId": service_id, "date": date_str}
+    res = sess.get(url, params=params)
+    if res.status_code != 200:
+        raise Exception("Failed to fetch slots for day")
+    data = res.json()
+    times = []
+    if isinstance(data, list):
+        times = data
+    elif isinstance(data, dict):
+        if "freeTimes" in data:
+            times = data["freeTimes"]
+        elif "availableSlots" in data:
+            times = data["availableSlots"]
+    return times
+
+def book_appointment(user_id: int, cookies: dict, branch_id: str, service_id: str, date_str: str, time_str: str, email: str) -> bool:
+    """
+    Book an appointment (queue ticket) for the given service, branch, date, and time.
+    Returns True if booking successful, False otherwise.
+    """
+    sess = ensure_logged_in(user_id, cookies)
+    url = "https://roadpolice.am/hy/hqb-license-request"
+    data = {
+        "serviceId": service_id,
+        "branchId": branch_id,
+        "date": date_str,
+        "slotTime": time_str,
+        "email": email
+    }
+    res = sess.post(url, data=data)
+    if res.status_code != 200:
+        return False
+    try:
+        resp_json = res.json()
+        if isinstance(resp_json, dict) and resp_json.get("error"):
+            return False
+    except Exception:
+        pass
+    return True
