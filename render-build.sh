@@ -1,20 +1,24 @@
-#!/usr/bin/env bash  
-# exit on error  
+#!/usr/bin/env bash
+# exit on error
 set -o errexit
 
-# Տեղադրել Chrome-ը cache directorի մեջ (եթե արդեն չկա)
 STORAGE_DIR=/opt/render/project/.render
+
 if [[ ! -d $STORAGE_DIR/chrome ]]; then
-  echo "Downloading Google Chrome stable..."  
-  mkdir -p $STORAGE_DIR/chrome  
-  cd $STORAGE_DIR/chrome  
-  wget -q -P ./ https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb  
-  dpkg -x ./google-chrome-stable_current_amd64.deb $STORAGE_DIR/chrome  
-  rm ./google-chrome-stable_current_amd64.deb  
-  cd -  
-else  
-  echo "Using cached Chrome at $STORAGE_DIR/chrome"  
+  echo "Downloading Chrome..."
+  mkdir -p $STORAGE_DIR/chrome
+  cd $STORAGE_DIR/chrome
+  # Download the latest Google Chrome .deb package
+  wget -O chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+  # Extract Chrome without installing (no root needed):contentReference[oaicite:9]{index=9}
+  dpkg -x chrome.deb $STORAGE_DIR/chrome
+  rm chrome.deb
+  cd $HOME/project/src || cd $HOME/project
+else
+  echo "Using cached Chrome at $STORAGE_DIR/chrome"
 fi
 
-# Տեղադրել Python requirements փաթեթները
+# Install Python dependencies
 pip install -r requirements.txt
+
+echo "Build script completed."
