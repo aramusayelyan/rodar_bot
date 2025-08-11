@@ -84,7 +84,10 @@ async def exam_received(update: Update, context):
     # Վերամշակել արդյունքները և պատրաստել պատասխան msg
     if not slots or len(slots) == 0:
         # Ոչ մի ազատ օր չի գտնվել
-        reply_text = (f"Ցավոք, {branch} բաժանմունքում «{exam}» համար ազատ օրեր ներկայումս չկան։Լրացուցիչ տեղեկատվության համար կարող եք փորձել մեկ այլ բաժանմունք կամ կրկին ստուգել։")
+        reply_text = (
+    f"Ցավոք, {branch} բաժանմունքում «{exam}» համար ազատ օրեր ներկայումս չկան։ "
+    f"Խնդրում ենք փորձել կրկին ավելի ուշ։"
+)
     else:
         reply_lines = []
         for date_str, times in slots:
