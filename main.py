@@ -1,153 +1,146 @@
-import os
 import logging
-from telegram import (
-    ReplyKeyboardMarkup, KeyboardButton, Update
-)
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters,
-    ContextTypes, JobQueue
-)
-from config import BOT_TOKEN
-from keyboards import main_menu_keyboard, exam_type_keyboard, service_keyboard
-from scraper import fetch_availability  # Selenium scraper that gets real data
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters
+import config
+import keyboards
+from scraper import get_free_slots
 
-# Initialize logging
+# Սահմանել logger-ը
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# In-memory user session storage and availability cache
-user_data = {}
-availability_cache = {}
+# Սահմանել conversation-ի վիճակների կոնստանտները
+ASK_PHONE, ASK_BRANCH, ASK_EXAM = range(3)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    contact_button = KeyboardButton("📱 Ուղարկել հեռախոսահամար", request_contact=True)
+# Start command-ի handler
+async def start(update: Update, context):
+    """ /start սկսելուց ուղարկել ողջույն և հարցնել հեռախոսահամար """
+    user = update.effective_user
     await update.message.reply_text(
-        "Բարև 👋\nԽնդրում եմ կիսվեք ձեր հեռախոսահամարով՝ շարունակելու համար:",
-        reply_markup=ReplyKeyboardMarkup([[contact_button]], resize_keyboard=True, one_time_keyboard=True)
+        f"Բարի գալուստ, {user.first_name}։\n"
+        "Այս բոտը կօգնի Ձեզ պարզել վարորդական քննության հերթագրման ազատ օրերը և ժամերը։\n"
+        "Խնդրում եմ սեղմեք ստորև բերված կոճակը՝ Ձեր հեռախոսահամարը տրամադրելու համար։"
     )
+    # Ուղարկել կոճակ՝ հեռախոսահամար ստանալու համար
+    await update.message.reply_text(
+        "⬇️ Հեռախոսահամար փոխանցելու համար սեղմեք կոճակը",
+        reply_markup=keyboards.phone_request_keyboard()
+    )
+    return ASK_PHONE
 
-async def save_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Հեռախոսահամարի ստացման handler
+async def phone_received(update: Update, context):
+    """Ստանալ contact կամ վահանակով մուտքագրված հեռախոսահամար"""
     contact = update.message.contact
-    if not contact:
-        return
-    chat_id = update.message.chat_id
-    user_data[chat_id] = {"phone": contact.phone_number}
+    if contact:
+        phone_number = contact.phone_number
+    else:
+        # Եթե օգտատերը գրառեց որպես տեքստ (ոչ թե share contact), վերցնենք տեքստը
+        phone_number = update.message.text
+    # Հեռախոսահամարը կարող ենք պահել context.user_data dict-ում, եթե հետագայում օգտագործվի
+    context.user_data["phone"] = phone_number
+    logger.info("User phone: %s", phone_number)
+    # Հիմա անցնում ենք հաջորդ քայլին՝ ստորաբաժանման ընտրություն
     await update.message.reply_text(
-        "✅ Հեռախոսահամարը ստացվեց։\nԸնտրեք ստորաբաժանումը՝",
-        reply_markup=main_menu_keyboard()
+        "Շատ լավ, շնորհակալություն։ Հիմա ընտրեք մոտակա հաշվառման-քննական բաժանմունքը՝ որտեղ ցանկանում եք հանձնել քննությունը։",
+        reply_markup=keyboards.branch_keyboard()
     )
+    return ASK_BRANCH
 
-async def handle_department(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    if chat_id not in user_data:
-        await update.message.reply_text("Խնդրում եմ սկսեք /start հրամանով։")
-        return
-    dept = update.message.text
-    user_data[chat_id]["department"] = dept
-    await update.message.reply_text("Ընտրեք քննության տեսակը:", reply_markup=exam_type_keyboard())
+# Ստորաբաժանման ընտրության handler
+async def branch_received(update: Update, context):
+    """Ընդունում է բաժանմունքի անունը (որպես տեքստ, կոճակից)"""
+    branch = update.message.text
+    context.user_data["branch"] = branch
+    logger.info("User selected branch: %s", branch)
+    # Հարցնել քննության/ծառայության տեսակը
+    await update.message.reply_text(
+        f"Ընտրեցիք՝ {branch}։ Հիմա ընտրեք քննության տեսակը կամ ծառայության видը։",
+        reply_markup=keyboards.exam_type_keyboard()
+    )
+    return ASK_EXAM
 
-async def handle_exam_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    if chat_id not in user_data or "department" not in user_data[chat_id]:
-        await update.message.reply_text("Խնդրում եմ նախ ընտրեք ստորաբաժանումը։")
-        return
-    exam_type = update.message.text
-    user_data[chat_id]["exam_type"] = exam_type
-    await update.message.reply_text("Ընտրեք որոնման տեսակն՝", reply_markup=service_keyboard())
+# Քննության/ծառայության տեսակի ստացման handler
+async def exam_received(update: Update, context):
+    """Ընդունել քննության տեսակը և կանչել scraper ֆունկցիան, հետո արդյունքը ուղարկել"""
+    exam = update.message.text
+    branch = context.user_data.get("branch")
+    phone = context.user_data.get("phone")
+    logger.info("User selected exam type: %s", exam)
 
-async def handle_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    if chat_id not in user_data or "department" not in user_data[chat_id] or "exam_type" not in user_data[chat_id]:
-        await update.message.reply_text("Խնդրում եմ նախ սահմանեք բոլոր նախնական ընտրությունները։")
-        return
-    service = update.message.text
-    dept = user_data[chat_id]["department"]
-    exam = user_data[chat_id]["exam_type"]
+    # Տեղեկացնել օգտատիրոջը, որ տվյալները բերվում են (որոշ դեպքերում կարող է մի քանի վայրկյան տևել)
+    await update.message.reply_text("Խնդրում եմ սպասեք, հավաքում եմ տվյալները ⏳...")
 
-    # Use cached availability data
-    data = availability_cache.get(dept, {}).get(exam, {})
+    # Կանչել scraper-ը տվյալ պարամետրերով
+    try:
+        slots = get_free_slots(branch, exam)
+    except Exception as e:
+        logger.error("Scraper error: %s", e, exc_info=True)
+        await update.message.reply_text("Կներեք, սխալ առաջացավ տվյալներ հավաքելիս։ Խնդրում ենք փորձել ևս一次 ուշ։")
+        return ConversationHandler.END
 
-    response = []
-    if service == "Առաջիկա ազատ օր":
-        # Find the earliest date and time
-        if data:
-            earliest_date = min(data.keys())
-            earliest_time = min(data[earliest_date])
-            response.append(f"Առաջիկա ազատ slot\n{earliest_date} - {earliest_time}")
-        else:
-            response.append("Ներեցեք, առայժմ տվյալներ չկան։")
-    elif service == "Ըստ ամսաթվի":
-        await update.message.reply_text("Խնդրում եմ մուտքագրեք արտահայտ օրվա (օր.՝ 15.09.2025):")
-        context.user_data[chat_id] = {"service": "date_search", "dept": dept, "exam": exam}
-        return
-    elif service == "Ըստ ժամի":
-        await update.message.reply_text("Խնդրում եմ մուտքագրեք ո՞ր ժամը եք ուզում (օր.՝ 09:30):")
-        context.user_data[chat_id] = {"service": "time_search", "dept": dept, "exam": exam}
-        return
+    # Վերամշակել արդյունքները և պատրաստել պատասխան msg
+    if not slots or len(slots) == 0:
+        # Ոչ մի ազատ օր չի գտնվել
+        reply_text = (f"Ցավոք, {branch} բաժանմունքում «{exam}» համար ազատ օրեր ներկայումս չկան։
+Լրացուցիչ տեղեկատվության համար կարող եք փորձել մեկ այլ բաժանմունք կամ稍后 կրկին ստուգել։")
     else:
-        response.append("Չհաջողվեց ճանաչել ծառայությունը։")
-
-    await update.message.reply_text("\n".join(response))
-
-async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    ctx = context.user_data.get(chat_id, {})
-    service = ctx.get("service")
-    dept = ctx.get("dept")
-    exam = ctx.get("exam")
-    text = update.message.text
-
-    data = availability_cache.get(dept, {}).get(exam, {})
-
-    if service == "date_search":
-        try:
-            import datetime
-            query_date = datetime.datetime.strptime(text.strip(), "%d.%m.%Y").date()
-            times = data.get(query_date, [])
+        reply_lines = []
+        for date_str, times in slots:
+            # date_str հավանաբար YYYY-MM-DD ձևաչափով է, այն փոքր-ինչ ձևաչափենք ավելի ընթեռնելի համար։
+            pretty_date = date_str
+            try:
+                # Փորձել ամսաթիվը ձևափոխել "DD.MM.YYYY" կամ "DD Month YYYY" ձևաչափի
+                from datetime import datetime
+                dt = datetime.fromisoformat(date_str)
+                pretty_date = dt.strftime("%d.%m.%Y")
+            except:
+                pass
             if times:
-                await update.message.reply_text(f"{query_date.strftime('%d.%m.%Y')} – ազատ ժամեր՝ {', '.join(times)}")
+                times_str = " | ".join(times)
+                reply_lines.append(f"📅 {pretty_date} – առկա ժամեր: {times_str}")
             else:
-                await update.message.reply_text("Նշված օրը ազատ slot-եր չկան։")
-        except Exception:
-            await update.message.reply_text("Սխալ ձևաչափ։ Փորձեք ՕՕ.ԱԱԱԱ (օր.՝ 15.09.2025)")
-    elif service == "time_search":
-        matches = []
-        for d, times_list in data.items():
-            if text.strip() in times_list:
-                matches.append(d.strftime("%d.%m.%Y"))
-        if matches:
-            await update.message.reply_text(f"{text} ժամին ազատ է ` {', '.join(matches)}")
-        else:
-            await update.message.reply_text(f"{text} ժամին ազատ slot-եր չկան առաջիկայում։")
-    else:
-        await update.message.reply_text("Խնդրում եմ կատարեք /start֊ը՝ կրկին սկսելուն։")
+                # Եթե times list դատարկ է, նշանակել "ժամը պարզ չէ"
+                reply_lines.append(f"📅 {pretty_date} – հասանելի ժամ անորոշ")
+        reply_text = (f"🔎 `{branch}` բաժանմունքում **{exam}** համար գտնվել է հետևյալ ազատ ժամանակացույցը.\n"
+                      + "\n".join(reply_lines))
+    # Ուղարկել օգտատիրոջը արդյունքը
+    await update.message.reply_text(reply_text, parse_mode="Markdown")
+    # Ավարտել conversation-ը
+    return ConversationHandler.END
 
-async def refresh_data(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Նոր տվյալների քաղում է roadpolice.am-ից...")
-    data = fetch_availability()
-    if data:
-        global availability_cache
-        availability_cache = data
-        logger.info("Տվյալները թարմացվել են։")
-    else:
-        logger.error("Տվյալների քաղումն չհաջողվեց։")
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    jq = app.job_queue
-    jq.run_repeating(refresh_data, interval=2 * 3600, first=0)
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.CONTACT, save_contact))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_department))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_exam_type))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_service))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_input))
-
-    logger.info("Բոտը սկսել է աշխատել։")
-    app.run_polling()
+# /cancel հրամանի handler, եթե օգտատերը կամենա դադարեցնել
+async def cancel(update: Update, context):
+    await update.message.reply_text("Հարցումը դադարեցվեց։ Եթե ցանկանում եք սկսեք նորից, ուղարկեք /start։")
+    return ConversationHandler.END
 
 if __name__ == "__main__":
-    main()
+    # Ստեղծել Application
+    app = Application.builder().token(config.TELEGRAM_TOKEN).build()
+
+    # Ստեղծել ConversationHandler states-երով
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            ASK_PHONE: [MessageHandler(filters.CONTACT | filters.TEXT, phone_received)],
+            ASK_BRANCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, branch_received)],
+            ASK_EXAM: [MessageHandler(filters.TEXT & ~filters.COMMAND, exam_received)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        # allow_reentry = False (default)
+    )
+
+    app.add_handler(conv_handler)
+
+    # Ազատ command-ներ, օրինակ /cancel արդեն ավելացրինք conv_handler-ում
+    # Կարող ենք հավելյալ handlers ավելացնել եթե պետք լինի ուրիշ command-ների համար։
+
+    # Ավելացնել մի փոքր help հաղորդագրության համար /help հրամանի աջակցում
+    async def help_command(update: Update, context):
+        await update.message.reply_text("Օգտագործեք /start որպեսզի սկսել հարցումը վարորդական քննության ազատ ժամերի վերաբերյալ։")
+    app.add_handler(CommandHandler("help", help_command))
+
+    # Արտարկել polling mode-ով (երկարաժամկետ)
+    app.run_polling(stop_signals=None)  # stop_signals=None նշանակում ենք, որ Ctrl+C-ից բացի այլ signal-ներ չեն կանգնեցնի
