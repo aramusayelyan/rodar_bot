@@ -1,44 +1,58 @@
+from telegram import InlineKeyboardButton
+
+# Armenian names of branches (for reply keyboard display)
+SECTION_NAMES_ARM = [
+    "Երևան", "Շիրակ", "Լոռի", "Արմավիր", "Կոտայք",
+    "Արարատ", "Արագածոտն", "Սյունիք (Կապան)", "Տավուշ",
+    "Գեղարքունիք (Սևան)", "Գեղարքունիք (Մարտունի)", "Սյունիք (Գորիս)", "Վայոց Ձոր"
+]
+# Mapping from Armenian name to internal section code (as used in scraper)
+SECTION_NAME_TO_CODE = {
+    "Երևան": "Yerevan",
+    "Շիրակ": "Shirak",
+    "Լոռի": "Lori",
+    "Արմավիր": "Armavir",
+    "Կոտայք": "Kotayk",
+    "Արարատ": "Ararat",
+    "Արագածոտն": "Aragatsotn",
+    "Սյունիք (Կապան)": "Syunik_Kapan",
+    "Տավուշ": "Tavush",
+    "Գեղարքունիք (Սևան)": "Gegharkunik_Sevan",
+    "Գեղարքունիք (Մարտունի)": "Gegharkunik_Martuni",
+    "Սյունիք (Գորիս)": "Syunik_Goris",
+    "Վայոց Ձոր": "Vayots_Dzor"
+}
+# Reverse mapping to get Armenian name from code (for output formatting)
+SECTION_CODE_TO_ARM = {v: k for k, v in SECTION_NAME_TO_CODE.items()}
+
+# Reply keyboard for section selection (displaying Armenian names)
 from telegram import ReplyKeyboardMarkup, KeyboardButton
+section_menu = ReplyKeyboardMarkup(
+    [[KeyboardButton(name) for name in SECTION_NAMES_ARM[i:i+2]] for i in range(0, len(SECTION_NAMES_ARM), 2)],
+    resize_keyboard=True, one_time_keyboard=True
+)
 
-# Ստեղծել contact request կոճակով ստեղնաշար հեռախոսահամար ստանալու համար
-def phone_request_keyboard():
-    # Կոճակ, որը ուղարկում է օգտատիրոջ կոնտակտը (հեռախոսահամարը) սեղմելիս
-    button = KeyboardButton("📱 Ուղարկել հեռախոսահամարը", request_contact=True)  # :contentReference[oaicite:18]{index=18}
-    return ReplyKeyboardMarkup([[button]], one_time_keyboard=True, resize_keyboard=True)
+# Inline keyboard for exam type selection
+exam_type_buttons = [
+    [InlineKeyboardButton("Տեսություն 📘", callback_data="type_theory"),
+     InlineKeyboardButton("Գործնական 🚗", callback_data="type_practical")]
+]
 
-# Ստորաբաժանման (բաժնի) ընտրության ստեղնաշար կազմող ֆունկցիա
-def branch_keyboard():
-    branches = [
-        "Երևանի հաշվառման-քննական բաժին",
-        "Գյումրիի հսկիչ-քննական կենտրոն",
-        "Վանաձորի հաշվառման-քննական բաժանմունք",
-        "Արմավիրի հաշվառման-քննական բաժանմունք",
-        "Կոտայքի հաշվառման-քննական բաժանմունք",
-        "Արտաշատի հաշվառման-քննարկման բաժանմունք",
-        "Աշտարակի հաշվառման-քննարկման բաժանմունք",
-        "Կապանի հաշվառման-քննարկման բաժանմունք",
-        "Իջևանի հաշվառման-քննարկման բաժանմունք",
-        "Սևանի հաշվառման-քննարկման բաժանմունք",
-        "Մարտունու հաշվառման-քննարկման խումբ",
-        "Գորիսի հաշվառման-քննարկման խումբ",
-        "Վայքի հաշվառման-քննարկման խումբ"
-    ]
-    # Քանի որ ցանկը երկար է, ձևավորում ենք ստեղնաշարը 2 սյունակով՝ ավելի կոմպակտ
-    keyboard_layout = []
-    for i in range(0, len(branches), 2):
-        if i+1 < len(branches):
-            keyboard_layout.append([branches[i], branches[i+1]])
-        else:
-            keyboard_layout.append([branches[i]])
-    return ReplyKeyboardMarkup(keyboard_layout, one_time_keyboard=True, resize_keyboard=True)
+# Inline keyboard for filter type selection
+filter_type_buttons = [
+    [InlineKeyboardButton("Շաբաթվա օրով", callback_data="filter_day"),
+     InlineKeyboardButton("Օրացուցային ամսաթվով", callback_data="filter_date")],
+    [InlineKeyboardButton("Ժամով", callback_data="filter_hour"),
+     InlineKeyboardButton("Առանց ֆիլտրի", callback_data="filter_none")]
+]
 
-# Քննության տեսակի ընտրության ստեղնաշար
-def exam_type_keyboard():
-    # Առաջարկում ենք 4 տարբերակ՝ համապատասխանում է կայքի radio button-ներին
-    options = [
-        ["Տեսական քննություն", "Գործնական քննություն"],
-        ["Վար. վկայականի Փոխարինում", "Վար. վկայականի Կորուստ"]
-    ]
-    # Նշում: "Վար. վկայականի" նախաբանը կտոցեցինք, որպեսզի կոճակների վրայի տեքստը շատ երկար չստացվի։
-    # Օգտատիրոջը հասկանալի է, որ Փոխարինում/Կորուստ նկատի ունի վարորդական վկայականի։
-    return ReplyKeyboardMarkup(options, one_time_keyboard=True, resize_keyboard=True)
+# Inline keyboard for weekday selection
+weekday_buttons = [
+    [InlineKeyboardButton("Երկուշաբթի", callback_data="day_0"),
+     InlineKeyboardButton("Երեքշաբթի", callback_data="day_1"),
+     InlineKeyboardButton("Չորեքշաբթի", callback_data="day_2")],
+    [InlineKeyboardButton("Հինգշաբթի", callback_data="day_3"),
+     InlineKeyboardButton("Ուրբաթ", callback_data="day_4")],
+    [InlineKeyboardButton("Շաբաթ", callback_data="day_5"),
+     InlineKeyboardButton("Կիրակի", callback_data="day_6")]
+]
