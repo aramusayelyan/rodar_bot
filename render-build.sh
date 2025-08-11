@@ -4,21 +4,35 @@ set -o errexit
 
 STORAGE_DIR=/opt/render/project/.render
 
+# Install Google Chrome to cached directory if not present
 if [[ ! -d $STORAGE_DIR/chrome ]]; then
   echo "Downloading Chrome..."
   mkdir -p $STORAGE_DIR/chrome
   cd $STORAGE_DIR/chrome
-  # Download the latest Google Chrome .deb package
-  wget -O chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-  # Extract Chrome without installing (no root needed):contentReference[oaicite:9]{index=9}
+  wget -q -O chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   dpkg -x chrome.deb $STORAGE_DIR/chrome
   rm chrome.deb
-  cd $HOME/project/src || cd $HOME/project
+  cd - > /dev/null
 else
-  echo "Using cached Chrome at $STORAGE_DIR/chrome"
+  echo "Chrome is cached."
+fi
+
+# Install ChromeDriver to cached directory if not present
+if [[ ! -d $STORAGE_DIR/chromedriver ]]; then
+  echo "Downloading ChromeDriver..."
+  mkdir -p $STORAGE_DIR/chromedriver
+  # Get latest stable ChromeDriver version
+  LATEST_CHROMEDRIVER=$(wget -q -O - https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
+  wget -q -O $STORAGE_DIR/chromedriver/chromedriver_linux64.zip "https://chromedriver.storage.googleapis.com/${LATEST_CHROMEDRIVER}/chromedriver_linux64.zip"
+  # Install unzip if not already available
+  apt-get update && apt-get install -y unzip >/dev/null
+  unzip $STORAGE_DIR/chromedriver/chromedriver_linux64.zip -d $STORAGE_DIR/chromedriver
+  rm $STORAGE_DIR/chromedriver/chromedriver_linux64.zip
+  # Ensure chromedriver binary is executable
+  chmod +x $STORAGE_DIR/chromedriver/chromedriver
+else
+  echo "ChromeDriver is cached."
 fi
 
 # Install Python dependencies
 pip install -r requirements.txt
-
-echo "Build script completed."
