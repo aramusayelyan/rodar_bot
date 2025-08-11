@@ -44,3 +44,7 @@ def update_tracker_last_date(user_id: int, service_id: str, branch_id: str, last
 def disable_tracker(user_id: int, service_id: str, branch_id: str) -> None:
     supabase.table("trackers").update({"enabled": False}).eq("user_id", user_id)\
         .eq("service_id", service_id).eq("branch_id", branch_id).execute()
+
+def get_all_trackers() -> List[Dict[str, Any]]:
+    res = supabase.table("trackers").select("*").eq("enabled", True).execute()
+    return res.data or []
