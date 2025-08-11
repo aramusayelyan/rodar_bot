@@ -1,8 +1,10 @@
+# config.py
 import os
+from dotenv import load_dotenv
 
-# Telegram Bot API Token (from BotFather)
-BOT_TOKEN = os.getenv("BOT_TOKEN", "<YOUR-BOT-TOKEN>")
+load_dotenv()
 
-# Supabase configuration
-SUPABASE_URL = os.getenv("SUPABASE_URL", "<YOUR-SUPABASE-URL>")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "<YOUR-SUPABASE-SERVICE-ROLE-KEY>")
+# Telegram Bot Token and Supabase credentials from environment
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
