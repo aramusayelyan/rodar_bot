@@ -1,12 +1,31 @@
-BRANCH_OPTIONS = [
-    "Երևան", "Կոտայք", "Արմավիր", "Արարատ (Արտաշատ)", "Արագածոտն (Աշտարակ)",
-    "Շիրակ (Գյումրի)", "Լոռի (Վանաձոր)", "Տավուշ (Իջևան)",
-    "Գեղարքունիք (Սևան)", "Գեղարքունիք (Մարտունի)",
-    "Վայոց Ձոր (Վայք)", "Սյունիք (Կապան)", "Սյունիք (Գորիս)"
+from telegram import ReplyKeyboardMarkup, KeyboardButton
+
+# Branch options (list of lists for keyboard rows)
+branch_options = [
+    ["Երևանի հաշվառման-քննական բաժին"],
+    ["Գյումրիի հաշվառման-քննական կենտրոն", "Վանաձորի հաշվառման-քննական բաժին"],
+    ["Արմավիրի հաշվառման-քննական բաժին", "Աշտարակի հաշվառման-քննական բաժին"],
+    ["Կոտայքի հաշվառման-քննական բաժին", "Արտաշատի հաշվառման-քննական բաժին"],
+    ["Մարտունիի հաշվառման-քննական բաժին", "Սևանի հաշվառման-քննական բաժին"],
+    ["Կապանի հաշվառման-քննական բաժին", "Գորիսի հաշվառման-քննական բաժին"],
+    ["Իջևանի հաշվառման-քննական բաժին", "Վայքի հաշվառման-քննական բաժին"]
 ]
+branch_markup = ReplyKeyboardMarkup(branch_options, one_time_keyboard=True, resize_keyboard=True)
 
-EXAM_TYPE_OPTIONS = ["Տեսական քննություն", "Գործնական քննություն"]
+# Exam type options
+exam_type_options = [["Տեսական քննություն", "Գործնական քննություն"]]
+exam_type_markup = ReplyKeyboardMarkup(exam_type_options, one_time_keyboard=True, resize_keyboard=True)
 
-FILTER_TYPE_OPTIONS = ["Բոլոր օրերը", "Ըստ շաբաթվա օրվա", "Առաջին հասանելի օրը"]
+# Filter method options
+filter_method_options = [
+    ["Բոլոր ամսաթվերը", "Ըստ շաբաթվա օրվա"],
+    ["Ըստ ամսաթվի", "Ըստ ժամի"]
+]
+filter_method_markup = ReplyKeyboardMarkup(filter_method_options, one_time_keyboard=True, resize_keyboard=True)
 
-WEEKDAY_OPTIONS = ["Երկուշաբթի", "Երեքշաբթի", "Չորեքշաբթի", "Հինգշաբթի", "Ուրբաթ", "Շաբաթ", "Կիրակի"]
+# Weekdays options (Armenian names)
+weekdays_options = [
+    ["Երկուշաբթի", "Երեքշաբթի", "Չորեքշաբթի", "Հինգշաբթի"],
+    ["Ուրբաթ", "Շաբաթ", "Կիրակի"]
+]
+weekdays_markup = ReplyKeyboardMarkup(weekdays_options, one_time_keyboard=True, resize_keyboard=True)
