@@ -5,18 +5,12 @@ from config import SUPABASE_URL, SUPABASE_KEY
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# users: { id (bigint, PK), phone (text), social (text), email (text, nullable), cookies (jsonb, nullable) }
-# trackers: { id (uuid, default), user_id (bigint), service_id (text), branch_id (text),
-#             last_best_date (text, nullable), enabled (bool), created_at (timestamptz) }
-
 def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     res = supabase.table("users").select("*").eq("id", user_id).limit(1).execute()
-    if res.data:
-        return res.data[0]
-    return None
+    return res.data[0] if res.data else None
 
 def upsert_user(user_id: int, phone: str, social: str, email: Optional[str] = None, cookies: Optional[dict] = None) -> Dict[str, Any]:
-    record = {"id": user_id, "tg_user_id": user_id, "phone": phone, "social": social}
+    record: Dict[str, Any] = {"id": user_id, "tg_user_id": user_id, "phone": phone, "social": social}
     if email is not None:
         record["email"] = email
     if cookies is not None:
