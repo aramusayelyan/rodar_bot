@@ -1,3 +1,2 @@
-#!/usr/bin/env bash
-# Start the Python Telegram bot in polling mode
+#!/bin/bash
 python main.py
