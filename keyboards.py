@@ -1,58 +1,35 @@
-from telegram import InlineKeyboardButton
+from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# Armenian names of branches (for reply keyboard display)
-SECTION_NAMES_ARM = [
-    "Երևան", "Շիրակ", "Լոռի", "Արմավիր", "Կոտայք",
-    "Արարատ", "Արագածոտն", "Սյունիք (Կապան)", "Տավուշ",
-    "Գեղարքունիք (Սևան)", "Գեղարքունիք (Մարտունի)", "Սյունիք (Գորիս)", "Վայոց Ձոր"
-]
-# Mapping from Armenian name to internal section code (as used in scraper)
-SECTION_NAME_TO_CODE = {
-    "Երևան": "Yerevan",
-    "Շիրակ": "Shirak",
-    "Լոռի": "Lori",
-    "Արմավիր": "Armavir",
-    "Կոտայք": "Kotayk",
-    "Արարատ": "Ararat",
-    "Արագածոտն": "Aragatsotn",
-    "Սյունիք (Կապան)": "Syunik_Kapan",
-    "Տավուշ": "Tavush",
-    "Գեղարքունիք (Սևան)": "Gegharkunik_Sevan",
-    "Գեղարքունիք (Մարտունի)": "Gegharkunik_Martuni",
-    "Սյունիք (Գորիս)": "Syunik_Goris",
-    "Վայոց Ձոր": "Vayots_Dzor"
-}
-# Reverse mapping to get Armenian name from code (for output formatting)
-SECTION_CODE_TO_ARM = {v: k for k, v in SECTION_NAME_TO_CODE.items()}
+def phone_request_keyboard():
+    """Reply keyboard with a single button to share the user's phone number."""
+    button = KeyboardButton("📱 Կիսվել հեռախոսահամարով", request_contact=True)
+    return ReplyKeyboardMarkup([[button]], one_time_keyboard=True, resize_keyboard=True)
 
-# Reply keyboard for section selection (displaying Armenian names)
-from telegram import ReplyKeyboardMarkup, KeyboardButton
-section_menu = ReplyKeyboardMarkup(
-    [[KeyboardButton(name) for name in SECTION_NAMES_ARM[i:i+2]] for i in range(0, len(SECTION_NAMES_ARM), 2)],
-    resize_keyboard=True, one_time_keyboard=True
-)
+def department_keyboard(departments):
+    """
+    Inline keyboard for selecting a department.
+    `departments` should be a list of tuples (name, value).
+    Each button's callback_data is prefixed with "dept:" followed by the value.
+    """
+    buttons = []
+    for name, value in departments:
+        buttons.append([InlineKeyboardButton(name, callback_data=f"dept:{value}")])
+    # Optionally, you might split into multiple columns if needed.
+    return InlineKeyboardMarkup(buttons)
 
-# Inline keyboard for exam type selection
-exam_type_buttons = [
-    [InlineKeyboardButton("Տեսություն 📘", callback_data="type_theory"),
-     InlineKeyboardButton("Գործնական 🚗", callback_data="type_practical")]
-]
+def exam_type_keyboard():
+    """Inline keyboard for selecting exam type (theoretical or practical)."""
+    buttons = [
+        [InlineKeyboardButton("Տեսական", callback_data="theoretical")],
+        [InlineKeyboardButton("Գործնական", callback_data="practical")]
+    ]
+    return InlineKeyboardMarkup(buttons)
 
-# Inline keyboard for filter type selection
-filter_type_buttons = [
-    [InlineKeyboardButton("Շաբաթվա օրով", callback_data="filter_day"),
-     InlineKeyboardButton("Օրացուցային ամսաթվով", callback_data="filter_date")],
-    [InlineKeyboardButton("Ժամով", callback_data="filter_hour"),
-     InlineKeyboardButton("Առանց ֆիլտրի", callback_data="filter_none")]
-]
-
-# Inline keyboard for weekday selection
-weekday_buttons = [
-    [InlineKeyboardButton("Երկուշաբթի", callback_data="day_0"),
-     InlineKeyboardButton("Երեքշաբթի", callback_data="day_1"),
-     InlineKeyboardButton("Չորեքշաբթի", callback_data="day_2")],
-    [InlineKeyboardButton("Հինգշաբթի", callback_data="day_3"),
-     InlineKeyboardButton("Ուրբաթ", callback_data="day_4")],
-    [InlineKeyboardButton("Շաբաթ", callback_data="day_5"),
-     InlineKeyboardButton("Կիրակի", callback_data="day_6")]
-]
+def search_method_keyboard():
+    """Inline keyboard for selecting search mode: by earliest day, specific date, or specific time."""
+    buttons = [
+        [InlineKeyboardButton("🔜 Առաջին ազատ օրը", callback_data="day")],
+        [InlineKeyboardButton("📅 Ըստ ամսաթվի", callback_data="date")],
+        [InlineKeyboardButton("⏰ Ըստ ժամի", callback_data="time")]
+    ]
+    return InlineKeyboardMarkup(buttons)
