@@ -22,7 +22,8 @@ for k in _SUPA_KEYS:
 
 TRACK_INTERVAL_MINUTES = int(os.getenv("TRACK_INTERVAL_MINUTES", "120"))
 
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").strip()
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+
 PORT = int(os.getenv("PORT", "10000"))
 
 missing = []
