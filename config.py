@@ -1,10 +1,8 @@
 import os
 
-# Render-ում դնում ես Environment → Variables
-# Key: BOT_TOKEN  |  Value: <քո թոքենը>
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise RuntimeError("Missing BOT_TOKEN environment variable.")
+# Telegram Bot API Token (from BotFather)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "<YOUR-BOT-TOKEN>")
 
-# project-ի այլ մասերում հարմար լինելու համար
-TELEGRAM_TOKEN = BOT_TOKEN
+# Supabase configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL", "<YOUR-SUPABASE-URL>")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "<YOUR-SUPABASE-SERVICE-ROLE-KEY>")
