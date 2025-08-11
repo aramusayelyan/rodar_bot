@@ -15,18 +15,17 @@ logger = logging.getLogger(__name__)
 # Define conversation state constants
 PHONE, BRANCH, EXAM_TYPE, FILTER_METHOD, FILTER_VALUE = range(5)
 
-def start(update: Update, context: CallbackContext):
-    """Handle /start command, begin conversation by asking for phone contact."""
-    user = update.effective_user
-    # Greeting message and ask for phone number
+async def start(update: Update, context: CallbackContext) -> int:
+    # Send greeting and ask for phone number
     contact_button = KeyboardButton("📱 Ուղարկել հեռախոսահամարս", request_contact=True)
     reply_markup = ReplyKeyboardMarkup([[contact_button]], one_time_keyboard=True, resize_keyboard=True)
-    update.message.reply_text(
-        f"Բարի օր, {user.first_name if user else 'Օգտագործող'}։\n"
+    await update.message.reply_text(
+        f"Բարի օր, {update.effective_user.first_name or 'Օգտագործող'}։\n"
         "Խնդրում եմ կիսվել Ձեր հեռախոսահամարով՝ շարունակելու համար։",
         reply_markup=reply_markup
     )
     return PHONE
+
 
 def handle_contact(update: Update, context: CallbackContext):
     """Receive user's contact (phone number) and proceed to ask for branch."""
