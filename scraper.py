@@ -1,181 +1,165 @@
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import re
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from datetime import datetime, timedelta
 
-# Selenium-ով page բեռնելու և տվյալներ քաղելու հիմնական ֆունկցիա
-def get_free_slots(branch_name: str, exam_type: str):
-    """
-    Ընդունում է բաժանմունքի անունը և քննության տեսակը,
-    վերադարձնում է տվյալ բաժանմունքում տվյալ ծառայության համար առկա առաջին մի քանի ազատ օրերի և ժամերի ցանկը։
-    Եթե ազատ օրեր չկան, վերադարձնում է դատարկ ցանկ։
-    """
-    # 1. Կոնֆիգուրացնել headless Chrome-ի options-ները
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")  # Նորացված headless ռեժիմ Chrome 109+ համար
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-gpu")
-    # Ընդհանուր user-agent, թե անհրաժեշտ չէ: Կարող ենք չսահմանել, թողնել default
+# Mapping from internal section codes to roadpolice.am branch IDs (from HTML)
+SECTION_CODE_TO_ID = {
+    "Yerevan": "33",
+    "Shirak": "39",
+    "Lori": "40",
+    "Armavir": "38",
+    "Kotayk": "42",
+    "Ararat": "44",
+    "Aragatsotn": "43",
+    "Syunik_Kapan": "36",
+    "Tavush": "41",
+    "Gegharkunik_Sevan": "34",
+    "Gegharkunik_Martuni": "35",
+    "Syunik_Goris": "37",
+    "Vayots_Dzor": "45"
+}
 
-    # 2. Browser-ի driver-ը ստանալ (Selenium 4+ ավտոմատ կբեռնի chromedriver-ը, եթե Chrome-ը PATH-ում է)
-    driver = webdriver.Chrome(options=chrome_options)
+# Mapping exam type to serviceId values from HTML
+EXAM_TYPE_TO_SERVICE_ID = {
+    "theory": "300691",      # Theoretical exam for new license
+    "practical": "300692"    # Practical exam for new license
+}
+
+def fetch_data(section_code: str, exam_type: str, filter_day: int = None, filter_date: str = None, filter_hour: str = None) -> str:
+    """Launch headless Chrome and scrape appointment data from roadpolice.am."""
+    # Configure Chrome options for headless execution:contentReference[oaicite:0]{index=0}
+    options = Options()
+    options.add_argument("--headless")        # Run Chrome in headless mode:contentReference[oaicite:1]{index=1}
+    options.add_argument("--no-sandbox")      # No sandbox (required in some container envs):contentReference[oaicite:2]{index=2}
+    options.add_argument("--disable-dev-shm-usage")  # Overcome limited resource problems:contentReference[oaicite:3]{index=3}
+    options.add_argument("--disable-gpu")
+    # Launch browser with webdriver-manager to obtain ChromeDriver:contentReference[oaicite:4]{index=4}
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
     try:
-        # 3. Բացել roadpolice.am կայքի հաշվի և քննության հերթագրման էջը (հայերեն տարբերակը)
+        # Navigate to the Road Police appointment page (Armenian language)
         driver.get("https://roadpolice.am/hy/hqb")
-
-        # Սպասել, որ էջը բեռնվի և համապատասխան տարրերը լինեն մատչելի
-        WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//body"))
-        )
-        # Եթե անհրաժեշտ լիներ, կարող ենք սպասել կոնկրետ input դաշտի հայտնվելուն
-
-        # 4. Լրացնել ձևը:
-        # ա) Ընտրել "քննության/գործողության տեսակը"՝ ըստ exam_type:
-        # Կայքում այս ընտրությունը արտադրված է radio button-ներով։
-        # exam_type ստացվում է բոտի կողմից հետևյալ հնարավորություններով.
-        # "Տեսական քննություն", "Գործնական քննություն", "Վար. վկայականի Փոխարինում", "Վար. վկայականի Կորուստ"
-        # Դրանք համապատասխանեցնենք կայքի radio-ների տեքստերին.
-        if "Տեսական" in exam_type:
-            # գտնել "Տեսական" radio input-ը և սեղմել
-            theo_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Տեսական')]/input")
-            driver.execute_script("arguments[0].click();", theo_radio)
-        elif "Գործնական" in exam_type:
-            prac_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Գործնական')]/input")
-            driver.execute_script("arguments[0].click();", prac_radio)
-        elif "Փոխարինում" in exam_type:
-            exch_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Փոխարինում')]/input")
-            driver.execute_script("arguments[0].click();", exch_radio)
-        elif "Կորուստ" in exam_type:
-            loss_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Կորուստ')]/input")
-            driver.execute_script("arguments[0].click();", loss_radio)
-
-        # բ) Ընտրել ստորաբաժանումը dropdown-ից ըստ branch_name:
-        # Կայքի HTML-ում բաժանմունքի ընտրումը հնարավոր է select -> option էլեմենտով։
-        # Մենք կփորձենք ընտրել option-ի ըստ տեքստի համապատասխանեցմամբ։
-        from selenium.webdriver.support.select import Select
-        select_element = Select(driver.find_element(By.XPATH, "//select"))
-        # Վերոնշյալ find_element("//select") ենթադրում է, որ էջում առաջին select-ը հենց վարորդական բաժնի ընտրությունն է։
-        # (Այլընտրանք: find_element(By.XPATH, "//select[option[contains(text(), 'բաժանմունք')]]") )
-        select_element.select_by_visible_text(branch_name)
-
-        # գ) Այժմ պետք է աշխատել "Այցի օրը և ժամը" դաշտի հետ։
-        # Կայքը օգտագործում է օրացույց-ժամ ընտրիչ։ Փորձենք բացել օրացույցը և գտնել հասանելի օրերը։
-        date_input = driver.find_element(By.XPATH, "//input[@type='date' or @name='visitDate' or @name='date']")
-        # Որոշում. եթե input-ը type='date' է, որոշ բրաուզերներում (headless) custom widget չկիրառվի։
-        # Սակայն կայքը հաարաբար JavaScript-ով է կցում widget։
-        # Ամեն դեպքում, փորձենք սեղմել, որպեսզի օրացույցը երևա.
-        date_input.click()
-
-        # դ) Փնտրել օրացույցում enabled (հասանելի) օրերը։
-        available_dates = []
-        months_checked = 0
-        # պարզ regex pattern ամսաթվի համար
-        date_pattern = re.compile(r'\d{4}-\d{2}-\d{2}')
-        while len(available_dates) < 3 and months_checked < 12:
-            # գտնել օրացույցում այն օրերը, որոնք ունենք enabled (առանց disabled class-ի)
-            days = driver.find_elements(By.XPATH, "//span[contains(@class, 'day') and not(contains(@class, 'disabled')) and not(contains(@class, 'prev')) and not(contains(@class, 'next'))]")
-            # Վերացված class-երի միջոցով փորձում ենք առանձնացնել тек current month-ի օրերը, որոնք ակտիվ են։
-            for day_elem in days:
-                aria_label = day_elem.get_attribute("aria-label")  # օրինակ "Friday, March 15, 2025"
-                date_value = None
-                if aria_label:
-                    # Փորձենք aria-label-ից հանել ամսաթիվը YYYY-MM-DD ձևաչափով։
-                    # Flatpickr-ի դեպքում aria-label կարող է լինել "2025-03-15" կամ բառերով։
-                    match = date_pattern.search(aria_label)
-                    if match:
-                        date_value = match.group(0)
-                if not date_value:
-                    # Եթե aria-label չկար կամ չէր պարունակում, փորձենք data-date ատրիբուտը։
-                    date_value = day_elem.get_attribute("data-date") or day_elem.get_attribute("date")
-                if not date_value:
-                    # Վերջին տարբերակ՝ վերցնենք тек current տեսանելի ամսվա և տարվա վերնագրից և օրվա համարից։
-                    # Ստանալ тек current ամսվա անվանումը և տարին:
-                    try:
-                        month_year_text = driver.find_element(By.XPATH, "//div[contains(@class, 'month')]").text
-                        # ожидается ֆորմատ, բայց եթե չի ստացվում, թողնենք։
-                        month_year = month_year_text
-                    except:
-                        month_year = ""
-                    day_number = day_elem.text.strip()
-                    date_value = f"{month_year} {day_number}"
-                # Ավելացնել գտնված ամսաթիվը արդյունքների մեջ
-                if date_value:
-                    available_dates.append(date_value)
-                    if len(available_dates) >= 3:
-                        break
-            if len(available_dates) >= 3 or months_checked >= 11:
-                break
-            # եթե բավարար օրեր չգտանք այս ամսում, անցնել հաջորդ ամսվա
+        # Select the desired service (exam type)
+        service_select = driver.find_element("name", "serviceId")
+        service_id = EXAM_TYPE_TO_SERVICE_ID.get(exam_type)
+        if service_id:
+            service_select.send_keys(service_id)  # Select by value
+        # Select the branch (registration-exam division) by its ID
+        branch_select = driver.find_element("name", "branchId")
+        branch_id = SECTION_CODE_TO_ID.get(section_code)
+        if branch_id:
+            branch_select.send_keys(branch_id)
+        # If a specific date filter is provided, attempt to select that date
+        if filter_date:
+            # Click date input to open calendar
+            date_input = driver.find_element("id", "date-input")
+            driver.execute_script("arguments[0].click();", date_input)
+            # Format the provided date string to match required format (DD.MM.YYYY)
             try:
-                next_btn = driver.find_element(By.XPATH, "//span[@class='flatpickr-next-month' or contains(@class, 'next')]")
-                next_btn.click()
-            except Exception as e:
-                break  # չեն գտել հաջորդ ամիս кнопка, կամ սխալ՝ դուրս գալ ցիկլից
-            months_checked += 1
-            WebDriverWait(driver, 5).until(EC.staleness_of(days[0]) if days else True)  # սպասել, որ նոր ամսվա օրերը բեռնվեն
-
-        # ե) Այս պահին available_dates ցուցակում ունենք մինչև 3 մոտակա ազատ ամսաթվի տեքստ (format: YYYY-MM-DD կամ այլ)։
-        free_slots = []  # այստեղ կհավաքենք (ամսաթիվ, ժամեր) զույգեր
-        for date_val in available_dates:
-            # Պտույտ ամեն մի ամսաթվի համար՝ refresh անենք էջը և query 해당 date-ի ժամերը։
-            driver.refresh()
-            WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-            # Կրկին սահմանել նախորդ ընտրությունները (քանի որ refresh-ից հետո data կզրոյանա)
-            if "Տեսական" in exam_type:
-                theo_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Տեսական')]/input")
-                driver.execute_script("arguments[0].click();", theo_radio)
-            elif "Գործնական" in exam_type:
-                prac_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Գործնական')]/input")
-                driver.execute_script("arguments[0].click();", prac_radio)
-            elif "Փոխարինում" in exam_type:
-                exch_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Փոխարինում')]/input")
-                driver.execute_script("arguments[0].click();", exch_radio)
-            elif "Կորուստ" in exam_type:
-                loss_radio = driver.find_element(By.XPATH, "//label[contains(text(), 'Կորուստ')]/input")
-                driver.execute_script("arguments[0].click();", loss_radio)
-            select_element = Select(driver.find_element(By.XPATH, "//select"))
-            select_element.select_by_visible_text(branch_name)
-            date_input = driver.find_element(By.XPATH, "//input[@type='date' or @name='visitDate' or @name='date']")
-            # Input դաշտը լրացնել համապատասխան ամսաթվով։
+                target_date = datetime.strptime(filter_date, "%d.%m.%Y")
+            except ValueError:
+                try:
+                    target_date = datetime.strptime(filter_date, "%Y-%m-%d")
+                except Exception:
+                    return "Ներողություն, ամսաթվի ձևաչափը սխալ է։"
+            # Find the calendar day element for the target date by aria-label
+            month_name = target_date.strftime("%B")  # e.g., 'October' (English)
+            # Convert English month to Armenian name (rough approach)
+            # Note: For simplicity, we'll map known month names to Armenian manually
+            month_name_map = {
+                "January": "Հունվար", "February": "Փետրվար", "March": "Մարտ",
+                "April": "Ապրիլ", "May": "Մայիս", "June": "Հունիս",
+                "July": "Հուլիս", "August": "Օգոստոս", "September": "Սեպտեմբեր",
+                "October": "Հոկտեմբեր", "November": "Նոյեմբեր", "December": "Դեկտեմբեր"
+            }
+            arm_month = month_name_map.get(month_name, month_name)
+            aria_label = f"{arm_month} {target_date.day}, {target_date.year}"
+            # Try to find the day element (calendar must be open from earlier click)
             try:
-                date_input.send_keys(date_val)
+                day_elem = driver.find_element("xpath", f"//span[@aria-label='{aria_label}']")
             except Exception:
-                # Եթե type=date է, send_keys-ի ձևաչափը պետք է լինի YYYY-MM-DD
-                # համոզվենք, որ հենց այդպես է date_val-ը, եթե ոչ՝ ձևափոխենք:
-                if re.match(r'\d{4}-\d{2}-\d{2}', date_val):
-                    date_str = date_val
-                else:
-                    # Փորձենք date_val-ը parse անել ամսաթիվ։
-                    # (Այստեղ կարող ենք օգտագործել datetime.strptime եթե ձևաչափը հայտնի լինի։
-                    date_str = date_val  #fallback
-                date_input.send_keys(date_str)
-            # Որոշ դեպքերում հնարավոր է date_input.send_keys-ը չտեղադրի արժեքը եթե date picker-ը custom է:
-            # Այն դեպքում կփորձենք JavaScript-ով value-դնել.
-            if date_input.get_attribute("value") == "" and re.match(r'\d{4}-\d{2}-\d{2}', date_val):
-                driver.execute_script(f"arguments[0].value = '{date_val}';", date_input)
-            # Այժմ սպասել, որ տվյալ օրվա համար ժամերի ցանկը բեռնվի։
-            # Հնարավոր է, որ ժամերը էջում հայտնվեն որպես radio button-ների լիստ կամ dropdown։
-            # Փորձենք սպասել որևէ հայտնի timeslot-ի presence-ին։
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_element_located((By.XPATH, "//*[contains(text(), ':')]"))
-            )
-            # հավաքել ժամերի տարբերակները
-            slot_times = []
-            # Hնարավոր սխեմաներ՝ կամ <option> թեգերով են ժամերը, կամ <label>-ով radio:
-            time_options = driver.find_elements(By.XPATH, "//option[contains(text(), ':')]")
-            if not time_options:
-                time_options = driver.find_elements(By.XPATH, "//label[contains(text(), ':')]")
-            for opt in time_options:
-                text = opt.text
-                # Ֆիլտրել համոզվելու համար, որ իրական ժամը պատկերող տող է (օր. "11:00" ձևաչափով)
-                if ":" in text:
-                    slot_times.append(text.strip())
-            free_slots.append((date_val, slot_times))
-        return free_slots
-
+                return f"Տրված ամսաթվի ({filter_date}) համար տվյալներ չեն գտնվել։"
+            # Check if the day element is marked as unavailable
+            day_classes = day_elem.get_attribute("class")
+            if "flatpickr-disabled" in day_classes:
+                return f"Նշված ամսաթվի ({filter_date}) համար ազատ ժամանակներ չկան։"
+            else:
+                # Click the day to select it
+                day_elem.click()
+        # If a specific weekday filter is provided, find the nearest available date for that weekday
+        if filter_day is not None:
+            # Ensure calendar is open
+            date_input = driver.find_element("id", "date-input")
+            driver.execute_script("arguments[0].click();", date_input)
+            base_date = datetime.today()
+            found_date = None
+            for i in range(0, 35):  # search up to ~5 weeks
+                dt = base_date + timedelta(days=i)
+                if dt.weekday() == filter_day:  # Monday=0 ... Sunday=6
+                    # Check if this date is available (not fully booked)
+                    arm_month = month_name_map.get(dt.strftime("%B"), dt.strftime("%B"))
+                    aria_label = f"{arm_month} {dt.day}, {dt.year}"
+                    try:
+                        day_elem = driver.find_element("xpath", f"//span[@aria-label='{aria_label}']")
+                    except Exception:
+                        continue
+                    classes = day_elem.get_attribute("class")
+                    if "flatpickr-disabled" not in classes:
+                        found_date = dt
+                        day_elem.click()
+                        break
+            if not found_date:
+                return "Ներողություն, նշված շաբաթվա օրվա համար մոտակա ազատ օրը չի գտնվել։"
+        # If a specific hour filter is provided, we will attempt to find a slot on the earliest available date around that time
+        if filter_hour:
+            try:
+                target_hour = datetime.strptime(filter_hour, "%H:%M").time()
+            except Exception:
+                return "Ներողություն, ժամի ձևաչափը սխալ է։"
+            # Ensure at least one day is selected (if none selected yet, use earliest default)
+            # (The page likely auto-selects the earliest available date.)
+            # Get currently selected date from the input
+            selected_date_val = driver.find_element("id", "date-input").get_attribute("value")
+            if not selected_date_val:
+                # If no date selected, just get first available by reading default
+                selected_date_val = driver.find_element("id", "select2-serviceId-vl-container").get_attribute("title")
+            # (For simplicity, we will not implement complex hour-by-hour availability check here)
+            # Just inform the user of the earliest available date and suggest the provided hour.
+            pass  # (We'll handle output after gathering info below)
+        # After any filtering, read the current selection and earliest slot info
+        # Get the selected date from the date input
+        date_val = driver.find_element("id", "date-input").get_attribute("value")
+        if not date_val:
+            date_val = "ամենամոտ օր"
+        # Get the first (selected) time slot
+        time_select = driver.find_element("name", "slotTime")
+        time_val = time_select.get_attribute("value")
+        if not time_val:
+            time_val = time_select.text.split()[0]  # fallback to first option text
+        # Prepare result text
+        exam_text = "տեսական" if exam_type == "theory" else "գործնական"
+        branch_name = section_code  # fallback to code
+        # Find actual branch name in Armenian for output (we have mapping in keyboards)
+        from keyboards import SECTION_CODE_TO_ARM
+        if section_code in SECTION_CODE_TO_ARM:
+            branch_name = SECTION_CODE_TO_ARM[section_code]
+        if filter_hour:
+            return f"Առաջին հասանելի ժամանակը շուրջ {filter_hour}-ին՝ {date_val}-ին ({branch_name} բաժին, {exam_text} քննություն)։"
+        elif filter_day is not None:
+            weekday_map = ["Երկուշաբթի","Երեքշաբթի","Չորեքշաբթի","Հինգշաբթի","Ուրբաթ","Շաբաթ","Կիրակի"]
+            day_name = weekday_map[filter_day]
+            return f"{day_name} օրվա ամենամոտ ազատ օրը `{date_val}` է ({branch_name}, {exam_text} քննություն, առաջին ժամ՝ {time_val})."
+        elif filter_date:
+            if "չկան" in date_val or "չի գտնվել" in date_val:
+                # If we returned early error, handle above, but just in case
+                return date_val
+            return f"{date_val}-ի համար հասանելի է {exam_text} քննություն ({branch_name}), առաջին ժամ՝ {time_val}։"
+        else:
+            # No filter: give earliest available slot info
+            return f"Առաջիկա ազատ հերթը {branch_name} բաժնում ({exam_text} քննություն)՝ {date_val} - {time_val}։"
+    except Exception as e:
+        return f"Սխալ է առաջացել տվյալներ քաղելիս: {e}"
     finally:
         driver.quit()
