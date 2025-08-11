@@ -1,9 +1,5 @@
-#!/usr/bin/env bash  
-set -o errexit
-
-# Ավելացնել Chrome-ի binary-ի ուղին PATH փոփոխականի մեջ  
-export PATH="/opt/render/project/.render/chrome/opt/google/chrome:$PATH"  
-echo "Chrome path added. Starting bot..."
-
-# Գործարկել Python բոտը  
-python main.py
+#!/usr/bin/env bash
+# Add Chrome to PATH for Selenium to find the binary
+export PATH="${PATH}:/opt/render/project/.render/chrome/opt/google/chrome"  #:contentReference[oaicite:14]{index=14}
+# Launch the Telegram bot
+exec python main.py
