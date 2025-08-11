@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import os
+import re
 from datetime import date
 from typing import Dict, Any, Tuple, List, Optional
 
@@ -51,6 +52,24 @@ def _save_cookies(user_id: int, sess: requests.Session):
         logger.warning("save_cookies failed: %s", e)
 
 
+# ================== Utils ==================
+ARM_PHONE_RE = re.compile(r"^(?:\+?374|0)\d{8}$")
+
+def normalize_phone(raw: str) -> Optional[str]:
+    """Արժեքը բերում ենք միջազգային ձևաչափի՝ +374XXXXXXXX."""
+    if not raw:
+        return None
+    num = re.sub(r"[^\d+]", "", raw)  # մաքրում ենք բացատները, գծիկները և այլն
+    if num.startswith("+374") and len(num) == 12 and num[1:].isdigit():
+        return num
+    if num.startswith("0") and len(num) == 9 and num.isdigit():
+        return "+374" + num[1:]
+    # երբեմն կոնտակտից գալիս է 374xxxxxxxx առանց + նշանի
+    if num.startswith("374") and len(num) == 11 and num.isdigit():
+        return "+" + num
+    return None
+
+
 # ========== Error handler ==========
 def error_handler(update: Optional[Update], context: CallbackContext):
     logger.exception("Unhandled error", exc_info=context.error)
@@ -69,8 +88,12 @@ def start(update: Update, context: CallbackContext):
     user = update.effective_user
     context.user_data.clear()
     update.message.reply_text(
-        f"Բարի գալուստ, {user.first_name if user and user.first_name else 'օգտագործող'} 👋\n"
-        "Խնդրում եմ կիսվեք Ձեր հեռախոսահամարով՝ շարունակելու համար։",
+        (
+            f"Բարի գալուստ, {user.first_name if user and user.first_name else 'օգտագործող'} 👋\n\n"
+            "Խնդրում ենք տրամադրել հեռախոսահամար․\n"
+            "Ֆորմատ՝ **+374XXXXXXXX** կամ **0XXXXXXXX** (օր. +37455123456 կամ 055123456)\n\n"
+            "Կարող եք նաև սեղմել կոճակը՝ կոնտակտ ուղարկելու համար։"
+        ),
         reply_markup=ReplyKeyboardMarkup(
             [[KeyboardButton("📱 Ուղարկել հեռախոսահամարս", request_contact=True)]],
             resize_keyboard=True,
@@ -81,14 +104,23 @@ def start(update: Update, context: CallbackContext):
 
 
 def got_phone(update: Update, context: CallbackContext):
-    c = update.message.contact
-    if not c or not c.phone_number:
-        update.message.reply_text("Խնդրում եմ սեղմել «📱 Ուղարկել հեռախոսահամարս» կոճակը։")
+    # Թույլ ենք տալիս կամ contact, կամ text
+    phone = None
+    if update.message.contact and update.message.contact.phone_number:
+        phone = normalize_phone(update.message.contact.phone_number)
+    else:
+        phone = normalize_phone((update.message.text or "").strip())
+
+    if not phone:
+        update.message.reply_text(
+            "Հեռախոսահամարը սխալ ֆորմատով է․ ուղարկեք **+374XXXXXXXX** կամ **0XXXXXXXX**:"
+        )
         return ASK_PHONE
+
     st = _state(context)
-    st["phone"] = c.phone_number
+    st["phone"] = phone
     update.message.reply_text(
-        "Շնորհակալություն։ Խնդրում եմ մուտքագրել Ձեր սոցիալական քարտի համարը (ՀԾՀ, 10 թվանշան)։",
+        "Շնորհակալություն։ Խնդրում ենք մուտքագրել Ձեր սոցիալական քարտի համարը (ՀԾՀ, 10 թվանշան)։",
         reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True, one_time_keyboard=True),
     )
     return ASK_SOCIAL
@@ -96,8 +128,8 @@ def got_phone(update: Update, context: CallbackContext):
 
 def got_social(update: Update, context: CallbackContext):
     social = (update.message.text or "").strip()
-    if not social.isdigit():
-        update.message.reply_text("Խնդրում ենք ուղարկել միայն թվերից բաղկացած ՀԾՀ (օր. 1234567890)։")
+    if not (social.isdigit() and len(social) == 10):
+        update.message.reply_text("Խնդրում ենք ուղարկել հենց 10 թվանշան հասարակ (օր. 1234567890)։")
         return ASK_SOCIAL
 
     st = _state(context)
@@ -117,7 +149,7 @@ def got_social(update: Update, context: CallbackContext):
 
 # ========== helpers for SMS login on-demand ==========
 def request_login_and_ask_code(update: Update, context: CallbackContext, sess: requests.Session):
-    """Kick off SMS login if services are not visible yet."""
+    """SMS-ը կուղարկվի միայն այն դեպքում, երբ ծառայությունների ցուցակը հասանելի չէ (սեսիա չկա/պահանջվում է հաստատում)."""
     user_id = update.effective_user.id
     u = db.get_user(user_id)
     if not u or not u.get("phone") or not u.get("social"):
@@ -140,6 +172,10 @@ def request_login_and_ask_code(update: Update, context: CallbackContext, sess: r
 
 def got_sms_code(update: Update, context: CallbackContext):
     code = (update.message.text or "").strip()
+    if not (code.isdigit() and (4 <= len(code) <= 8)):
+        update.message.reply_text("Կոդի ձևաչափը սխալ է։ Ուղարկեք SMS-ով ստացած թվային կոդը։")
+        return WAIT_SMS_CODE
+
     user_id = update.effective_user.id
     u = db.get_user(user_id)
     if not u or not u.get("phone") or not u.get("social"):
@@ -181,7 +217,7 @@ def search_cmd(update: Update, context: CallbackContext):
     branches, services = scraper.get_branch_and_services(sess)
     _save_cookies(user_id, sess)
 
-    # If services are not available, require SMS verification
+    # Եթե ծառայությունները չեն բեռնվել՝ պահանջում ենք SMS հաստատում
     if not services:
         return request_login_and_ask_code(update, context, sess)
 
@@ -275,11 +311,11 @@ def do_nearest(update: Update, context: CallbackContext):
 
     sess, _ = _get_session(user_id)
 
-    # 1) try official endpoint
+    # 1) Preferred API
     day, slots = scraper.nearest_day(sess, branch_id, service_id, "")
     if not day or not slots:
-        # 2) fallback: scan forward
-        day, slots = scraper.find_nearest_available(sess, branch_id, service_id, max_days=120)
+        # 2) Fallback՝ աստիճանաբար առաջ շարժվելով
+        day, slots = scraper.find_nearest_available(sess, branch_id, service_id, max_days=150)
 
     _save_cookies(user_id, sess)
 
@@ -303,7 +339,6 @@ def do_nearest(update: Update, context: CallbackContext):
 
 
 def do_all_days(update: Update, context: CallbackContext):
-    """Quick view: show 'disabled' days of the month (site exposes just disabled list)."""
     user_id = update.effective_user.id
     st = _state(context)
     branch_id = st["chosen"]["branch_id"]
@@ -422,7 +457,7 @@ def tracker_poll(context: CallbackContext):
             sess, _ = _get_session(user_id)
             day, slots = scraper.nearest_day(sess, branch_id, service_id, "")
             if not day or not slots:
-                day, slots = scraper.find_nearest_available(sess, branch_id, service_id, max_days=120)
+                day, slots = scraper.find_nearest_available(sess, branch_id, service_id, max_days=150)
             _save_cookies(user_id, sess)
             if day and (last is None or day < last):
                 msg = f"🔔 Գտնվեց ավելի մոտ օր՝ {day}\n/search հրամանով կարող եք ամրագրել։"
@@ -442,7 +477,6 @@ def cancel(update: Update, context: CallbackContext):
 
 
 def main():
-    # Updater (ptb v13)
     updater = Updater(token=config.BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
     dp.add_error_handler(error_handler)
@@ -450,7 +484,7 @@ def main():
     start_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            ASK_PHONE: [MessageHandler(Filters.contact, got_phone)],
+            ASK_PHONE: [MessageHandler(Filters.contact | (Filters.text & ~Filters.command), got_phone)],
             ASK_SOCIAL: [MessageHandler(Filters.text & ~Filters.command, got_social)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
