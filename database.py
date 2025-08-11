@@ -16,7 +16,7 @@ def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     return None
 
 def upsert_user(user_id: int, phone: str, social: str, email: Optional[str] = None, cookies: Optional[dict] = None) -> Dict[str, Any]:
-    record = {"id": user_id, "phone": phone, "social": social}
+    record = {"id": user_id, "tg_user_id": user_id, "phone": phone, "social": social}
     if email is not None:
         record["email"] = email
     if cookies is not None:
