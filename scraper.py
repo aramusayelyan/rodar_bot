@@ -60,23 +60,6 @@ def ensure_session(cookies: Optional[Dict[str, str]] = None) -> Tuple[requests.S
     return new_session()
 
 
-# ---------- date helpers ----------
-def _to_dd_mm_yyyy(dt: datetime) -> str:
-    return dt.strftime("%d-%m-%Y")
-
-
-def today_str() -> str:
-    return _to_dd_mm_yyyy(datetime.now())
-
-
-def _month_key(dt: datetime) -> str:
-    return dt.strftime("%Y-%m")
-
-
-def _is_weekend(dt: datetime) -> bool:
-    return dt.weekday() in (5, 6)  # Sat/Sun
-
-
 # ---------- page scrape ----------
 def get_branch_and_services(
     s: requests.Session,
@@ -105,7 +88,6 @@ def get_branch_and_services(
 def slots_for_month(
     sess: requests.Session, branch_id: str, service_id: str, date_dd_mm_yyyy: str
 ) -> List[str]:
-    """Returns DISABLED dates list (dd-mm-YYYY) for the month containing 'date'."""
     r = sess.post(
         f"{BASE}/{LANG}/hqb-slots-for-month",
         data={"branchId": branch_id, "serviceId": service_id, "date": date_dd_mm_yyyy},
@@ -179,8 +161,10 @@ def detach(sess: requests.Session, internal_id: str) -> Dict[str, Any]:
     return r.json()
 
 
-# --- SMS login (endpoints may vary by deployment; these are based on site JS) ---
+# --- SMS login (ծառայությունների ցուցակը դատարկ լինելու դեպքում) ---
 def login_init(sess: requests.Session, psn: str, phone_number: str, country: str = "AM") -> Any:
+    # Ուշադրություն. կոնկրետ URL-ը կարող է տարբերվել ենթադրածից՝ հիմնված կայքի ներկա բիլդի վրա.
+    # Եթե նախագիծում ունես ճշգրիտ login endpoint-ներ, փոխիր այստեղ.
     r = sess.post(
         f"{BASE}/{LANG}/hqb-sw/login",
         data={"psn": psn, "phone_number": phone_number, "country": country, "login_type": "hqb"},
@@ -208,7 +192,7 @@ def login_verify(sess: requests.Session, psn: str, phone_number: str, token: str
 
 # ---------- robust fallback scanning ----------
 def find_nearest_available(
-    sess: requests.Session, branch_id: str, service_id: str, max_days: int = 120
+    sess: requests.Session, branch_id: str, service_id: str, max_days: int = 150
 ) -> Tuple[Optional[str], List[Dict[str, str]]]:
     """
     Iterate forward day by day:
@@ -221,16 +205,17 @@ def find_nearest_available(
 
     for i in range(max_days):
         d = start + timedelta(days=i)
-        if _is_weekend(d):
+        # կայքը կիրակի/շաբաթ օրերը սովորաբար չի բացում — կարելի է անցնել
+        if d.weekday() in (5, 6):
             continue
 
-        mkey = _month_key(d)
+        mkey = d.strftime("%Y-%m")
         if mkey not in disabled_cache:
-            probe_date = _to_dd_mm_yyyy(d.replace(day=1))
+            probe_date = d.replace(day=1).strftime("%d-%m-%Y")
             disabled_list = slots_for_month(sess, branch_id, service_id, probe_date)
             disabled_cache[mkey] = set(disabled_list or [])
 
-        ds = _to_dd_mm_yyyy(d)
+        ds = d.strftime("%d-%m-%Y")
         if ds in disabled_cache[mkey]:
             continue
 
