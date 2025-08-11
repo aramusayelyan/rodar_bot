@@ -28,7 +28,6 @@ def weekdays_keyboard():
     return make_menu(rows)
 
 def list_keyboard_from_pairs(pairs: List[Tuple[str, str]], cols: int = 2):
-    """pairs: [(label, value)] but we show labels to user."""
     labels = [p[0] for p in pairs]
     rows = []
     row = []
@@ -42,7 +41,6 @@ def list_keyboard_from_pairs(pairs: List[Tuple[str, str]], cols: int = 2):
     return make_menu(rows)
 
 def slot_inline_keyboard(slots: List[dict]):
-    # show up to first 8 slots
     btns = []
     for s in slots[:8]:
         t = s.get("label") or s.get("value")
