@@ -1,2 +1,2 @@
-python-telegram-bot[job-queue]==20.7
+python-telegram-bot[job-queue]==22.3
 selenium==4.10.0
