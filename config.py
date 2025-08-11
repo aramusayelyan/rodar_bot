@@ -1,40 +1,18 @@
 # -*- coding: utf-8 -*-
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-SUPABASE_URL = (os.getenv("SUPABASE_URL", "") or os.getenv("SUPABASE_PROJECT_URL", "")).strip()
+if not BOT_TOKEN:
+    raise RuntimeError("Missing BOT_TOKEN")
 
-_SUPA_KEYS = [
-    "SUPABASE_KEY",
-    "SUPABASE_SERVICE_KEY",
-    "SUPABASE_SERVICE_ROLE_KEY",
-    "SUPABASE_ANON_KEY",
-]
-SUPABASE_KEY = ""
-for k in _SUPA_KEYS:
-    v = os.getenv(k)
-    if v and v.strip():
-        SUPABASE_KEY = v.strip()
-        break
-
-TRACK_INTERVAL_MINUTES = int(os.getenv("TRACK_INTERVAL_MINUTES", "120"))
-
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()
-
+# Render provides PORT; default to 10000
 PORT = int(os.getenv("PORT", "10000"))
 
-missing = []
-if not BOT_TOKEN:
-    missing.append("BOT_TOKEN")
-if not SUPABASE_URL:
-    missing.append("SUPABASE_URL")
-if not SUPABASE_KEY:
-    missing.append("SUPABASE_KEY (կամ SUPABASE_SERVICE_KEY / SUPABASE_SERVICE_ROLE_KEY / SUPABASE_ANON_KEY)")
+# Webhook base can come from explicit var or Render's external URL
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").strip() or os.getenv("RENDER_EXTERNAL_URL", "").strip()
 if not WEBHOOK_BASE_URL:
-    missing.append("WEBHOOK_BASE_URL")
+    # We don't raise here; main.py will validate before starting webhook
+    WEBHOOK_BASE_URL = ""
 
-if missing:
-    raise SystemExit("Պակասում են միջավայրի փոփոխականներ: " + ", ".join(missing))
+# Tracker interval (minutes)
+TRACK_INTERVAL_MINUTES = int(os.getenv("TRACK_INTERVAL_MINUTES", "120"))
