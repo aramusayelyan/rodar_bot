@@ -1,50 +1,59 @@
 # -*- coding: utf-8 -*-
-from typing import Optional, Dict, Any, List
+import os
+from typing import Any, Dict, List, Optional
+
 from supabase import create_client, Client
-from config import SUPABASE_URL, SUPABASE_KEY
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_KEY", "").strip()
+    or os.getenv("SUPABASE_SERVICE_KEY", "").strip()
+    or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    or os.getenv("SUPABASE_ANON_KEY", "").strip()
+)
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("Supabase env vars missing: SUPABASE_URL and SUPABASE_KEY (or SERVICE/ANON).")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
 def get_user(user_id: int) -> Optional[Dict[str, Any]]:
-    res = supabase.table("users").select("*").eq("id", user_id).limit(1).execute()
-    return res.data[0] if res.data else None
+    res = supabase.table("users").select("*").eq("tg_user_id", user_id).limit(1).execute()
+    data = res.data or []
+    return data[0] if data else None
 
-def upsert_user(user_id: int, phone: str, social: str, email: Optional[str] = None, cookies: Optional[dict] = None) -> Dict[str, Any]:
-    record: Dict[str, Any] = {"id": user_id, "tg_user_id": user_id, "phone": phone, "social": social}
-    if email is not None:
-        record["email"] = email
-    if cookies is not None:
-        record["cookies"] = cookies
-    supabase.table("users").upsert(record).execute()
-    return record
 
-def update_user(user_id: int, fields: Dict[str, Any]) -> None:
-    supabase.table("users").update(fields).eq("id", user_id).execute()
+def upsert_user(user_id: int, phone: str, social: str, cookies: Optional[Dict[str, str]] = None) -> None:
+    record = {
+        "tg_user_id": user_id,
+        "phone": phone,
+        "social": social,
+        "cookies": cookies or {},
+    }
+    supabase.table("users").upsert(record, on_conflict="tg_user_id").execute()
 
-def save_cookies(user_id: int, cookies: dict) -> None:
-    supabase.table("users").update({"cookies": cookies}).eq("id", user_id).execute()
 
-def get_trackers_for_user(user_id: int) -> List[Dict[str, Any]]:
-    res = supabase.table("trackers").select("*").eq("user_id", user_id).eq("enabled", True).execute()
-    return res.data or []
+def save_cookies(user_id: int, cookies: Dict[str, str]) -> None:
+    supabase.table("users").update({"cookies": cookies}).eq("tg_user_id", user_id).execute()
 
-def upsert_tracker(user_id: int, service_id: str, branch_id: str, last_best_date: Optional[str] = None, enabled: bool = True) -> None:
-    supabase.table("trackers").upsert({
-        "user_id": user_id,
+
+def upsert_tracker(user_id: int, service_id: str, branch_id: str, last_best_date: Optional[str] = None) -> None:
+    record = {
+        "tg_user_id": user_id,
         "service_id": service_id,
         "branch_id": branch_id,
         "last_best_date": last_best_date,
-        "enabled": enabled
-    }, on_conflict="user_id,service_id,branch_id").execute()
+    }
+    supabase.table("trackers").upsert(record, on_conflict="tg_user_id,service_id,branch_id").execute()
 
-def update_tracker_last_date(user_id: int, service_id: str, branch_id: str, last_best_date: Optional[str]) -> None:
-    supabase.table("trackers").update({"last_best_date": last_best_date}).eq("user_id", user_id)\
-        .eq("service_id", service_id).eq("branch_id", branch_id).execute()
-
-def disable_tracker(user_id: int, service_id: str, branch_id: str) -> None:
-    supabase.table("trackers").update({"enabled": False}).eq("user_id", user_id)\
-        .eq("service_id", service_id).eq("branch_id", branch_id).execute()
 
 def get_all_trackers() -> List[Dict[str, Any]]:
-    res = supabase.table("trackers").select("*").eq("enabled", True).execute()
+    res = supabase.table("trackers").select("*").execute()
     return res.data or []
+
+
+def update_tracker_last_date(user_id: int, service_id: str, branch_id: str, day: str) -> None:
+    supabase.table("trackers").update({"last_best_date": day}).match(
+        {"tg_user_id": user_id, "service_id": service_id, "branch_id": branch_id}
+    ).execute()
