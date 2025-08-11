@@ -2,7 +2,7 @@ import asyncio
 import logging
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
-    Application, ApplicationBuilder, CommandHandler, MessageHandler,
+    Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters
 )
 from config import TELEGRAM_TOKEN
@@ -99,7 +99,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 def main() -> None:
-    app: Application = ApplicationBuilder().token(TELEGRAM_TOKEN).concurrent_updates(False).build()
+    # ✅ Նոր API — առանց ApplicationBuilder-ի
+    app: Application = Application.builder().token(TELEGRAM_TOKEN).concurrent_updates(False).build()
+
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
