@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
-import json
-import re
-from typing import Dict, Any, List, Tuple, Optional
 import requests
+from typing import Dict, Any, List, Tuple, Optional
 from bs4 import BeautifulSoup
 
 BASE = "https://roadpolice.am"
@@ -18,13 +16,16 @@ def dict_to_cookiejar(cookies: Dict[str, str]) -> requests.cookies.RequestsCooki
         jar.set(k, v, domain="roadpolice.am", path="/")
     return jar
 
-def new_session() -> Tuple[requests.Session, str]:
-    s = requests.Session()
+def _attach_default_headers(s: requests.Session):
     s.headers.update({
         "User-Agent": UA,
         "Accept": "*/*",
         "X-Requested-With": "XMLHttpRequest",
     })
+
+def new_session() -> Tuple[requests.Session, str]:
+    s = requests.Session()
+    _attach_default_headers(s)
     r = s.get(f"{BASE}/{LANG}/hqb", timeout=25)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
@@ -37,13 +38,8 @@ def new_session() -> Tuple[requests.Session, str]:
 def ensure_session(cookies: Optional[Dict[str, str]] = None) -> Tuple[requests.Session, str]:
     if cookies:
         s = requests.Session()
-        s.headers.update({
-            "User-Agent": UA,
-            "Accept": "*/*",
-            "X-Requested-With": "XMLHttpRequest",
-        })
+        _attach_default_headers(s)
         s.cookies = dict_to_cookiejar(cookies)
-        # refresh csrf (in case expired)
         r = s.get(f"{BASE}/{LANG}/hqb", timeout=25)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
@@ -55,7 +51,6 @@ def ensure_session(cookies: Optional[Dict[str, str]] = None) -> Tuple[requests.S
     return new_session()
 
 def get_branch_and_services(s: requests.Session) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
-    """Return (branches, services) lists of (label, value) from the page."""
     r = s.get(f"{BASE}/{LANG}/hqb", timeout=25)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
@@ -115,17 +110,22 @@ def detach(sess: requests.Session, internal_id: str) -> Dict[str, Any]:
     r.raise_for_status()
     return r.json()
 
-# Optional login flow (only if site requires)
-def login_init(sess: requests.Session, psn: str, phone_number: str, country: str = "AM") -> Dict[str, Any]:
+def login_init(sess: requests.Session, psn: str, phone_number: str, country: str = "AM") -> Any:
     r = sess.post(f"{BASE}/{LANG}/hqb-sw/login",
                   data={"psn": psn, "phone_number": phone_number, "country": country, "login_type": "hqb"},
                   timeout=25)
     r.raise_for_status()
-    return r.json() if r.headers.get("content-type", "").startswith("application/json") else {"ok": True}
+    try:
+        return r.json()
+    except Exception:
+        return {"ok": True}
 
-def login_verify(sess: requests.Session, psn: str, phone_number: str, token: str, country: str = "AM") -> Dict[str, Any]:
+def login_verify(sess: requests.Session, psn: str, phone_number: str, token: str, country: str = "AM") -> Any:
     r = sess.post(f"{BASE}/{LANG}/hqb-sw/login_token",
                   data={"psn": psn, "phone_number": phone_number, "token": token, "country": country, "login_type": "hqb"},
                   timeout=25)
     r.raise_for_status()
-    return r.json() if r.headers.get("content-type", "").startswith("application/json") else {"ok": True}
+    try:
+        return r.json()
+    except Exception:
+        return {"ok": True}
