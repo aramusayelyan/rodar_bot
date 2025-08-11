@@ -165,7 +165,7 @@ def picked_filter(update: Update, context: CallbackContext):
         update.message.reply_text("Մուտքագրեք ամսաթիվը `ՕՕ-ԱԱ-ՏՏՏՏ` (օր. 25-08-2025)։")
         return ASK_DATE
     elif choice == "Ըստ ժամի":
-        update.message.reply_text("Մուտքագրեք ժամը `ԺԺ:ՐՐ` (օր. 09:00)։")
+        update.message.reply_text("Մուկագրեք ժամը `ԺԺ:ՐՐ` (օր. 09:00)։")
         return ASK_HOUR
     elif choice == "Շաբաթվա օրով":
         update.message.reply_text("Ընտրեք շաբաթվա օրը․", reply_markup=keyboards.weekdays_keyboard())
@@ -182,15 +182,22 @@ def do_nearest(update: Update, context: CallbackContext):
     branch_id = st["chosen"]["branch_id"]
     service_id = st["chosen"]["service_id"]
     sess, _ = get_session_for_user(user_id)
+
+    # 1) try official nearest endpoint
     day, slots = scraper.nearest_day(sess, branch_id, service_id, "")
+    if not day or not slots:
+        # 2) robust fallback scan
+        day, slots = scraper.find_nearest_available(sess, branch_id, service_id, max_days=120)
+
     save_session_cookies(user_id, sess)
+
     if not day:
-        update.message.reply_text("Ամենամոտ օր չի գտնվել։ Փորձեք այլ ֆիլտր։")
+        update.message.reply_text("Ամենամոտ օր չի գտնվել։ Փորձեք այլ ֆիլտր կամ բաժին/ծառայություն։")
         return ConversationHandler.END
+
     context.user_data["last_nearest"] = day
     st["chosen"]["date"] = day
-    if not slots:
-        slots = scraper.slots_for_day(sess, branch_id, service_id, day)
+
     if slots:
         st["chosen"]["slots"] = slots
         update.message.reply_text(f"Ամենամոտ օրը՝ {day}\nԸնտրեք ժամերից մեկը՝",
@@ -231,14 +238,14 @@ def got_date(update: Update, context: CallbackContext):
     return ConversationHandler.END
 
 def got_hour(update: Update, context: CallbackContext):
-    # պարզ տարբերակ՝ առաջին մոտ օրվա մեջ փնտրել այդ ժամը
+    # պարզեցված՝ օգտագործում ենք ամենամոտ օրը
     hr = update.message.text.strip()
     st = get_user_state(context)
     st["chosen"]["hour"] = hr
     return do_nearest(update, context)
 
 def got_weekday(update: Update, context: CallbackContext):
-    # պարզեցված՝ առաջարկում ենք ամենամոտ օրը
+    # պարզեցված՝ օգտագործում ենք ամենամոտ օրը
     return do_nearest(update, context)
 
 def slot_clicked(update: Update, context: CallbackContext):
@@ -302,11 +309,13 @@ def tracker_poll(context: CallbackContext):
             if not (user_id and branch_id and service_id):
                 continue
             sess, _ = get_session_for_user(user_id)
+            # try official, then fallback scan
             day, slots = scraper.nearest_day(sess, branch_id, service_id, "")
+            if not day or not slots:
+                day, slots = scraper.find_nearest_available(sess, branch_id, service_id, max_days=120)
             save_session_cookies(user_id, sess)
             if day and (last is None or day < last):
-                # found closer day
-                msg = f"🔔 Գտնվեց ավելի մոտ օր՝ {day} ({t.get('branch_id')})\n/search հրամանով կարող եք ամրագրել։"
+                msg = f"🔔 Գտնվեց ավելի մոտ օր՝ {day}\n/search հրամանով կարող եք ամրագրել։"
                 try:
                     bot.send_message(chat_id=user_id, text=msg)
                 except Exception:
@@ -365,7 +374,7 @@ def main():
         url_path=webhook_path,
         webhook_url=f"{config.WEBHOOK_BASE_URL.rstrip('/')}/{webhook_path}",
     )
-    logger.info("Bot started via webhook on port %s", config.PORT)
+    logging.info("Bot started via webhook on port %s", config.PORT)
     updater.idle()
 
 if __name__ == "__main__":
