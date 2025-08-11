@@ -1,4 +1,9 @@
 import os
 
-# Telegram Bot Token (set this in your environment or directly assign string - but avoid committing the actual token)
-TOKEN = os.getenv("BOT_TOKEN", "8435957231:AAGcgf1KeLydzEaKJB4loMI2aXW-wfz9x6c")
+# Կարդում ենք միայն BOT_TOKEN միջավայրային փոփոխականը
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise RuntimeError("Missing BOT_TOKEN environment variable.")
+
+# Եթե կոդում օգտագործվում է TELEGRAM_TOKEN, թող նույն արժեքը ստանա
+TELEGRAM_TOKEN = BOT_TOKEN
