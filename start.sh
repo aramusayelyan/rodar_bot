@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 python main.py
