@@ -1,59 +1,44 @@
 # -*- coding: utf-8 -*-
-import os
-from typing import Any, Dict, List, Optional
-
+from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
+import config
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = (
-    os.getenv("SUPABASE_KEY", "").strip()
-    or os.getenv("SUPABASE_SERVICE_KEY", "").strip()
-    or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-    or os.getenv("SUPABASE_ANON_KEY", "").strip()
-)
+supabase: Client = create_client(config.SUPABASE_URL, config.SUPABASE_KEY)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise RuntimeError("Supabase env vars missing: SUPABASE_URL and SUPABASE_KEY (or SERVICE/ANON).")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-
+# ---------- Users ----------
 def get_user(user_id: int) -> Optional[Dict[str, Any]]:
     res = supabase.table("users").select("*").eq("tg_user_id", user_id).limit(1).execute()
-    data = res.data or []
-    return data[0] if data else None
+    if res.data:
+        return res.data[0]
+    return None
 
+def upsert_user(user_id: int, phone: str, social: str, cookies: Dict[str, str]):
+    record = {"tg_user_id": user_id, "phone": phone, "social": social, "cookies": cookies}
+    try:
+        supabase.table("users").upsert(record, on_conflict="tg_user_id").execute()
+    except Exception:
+        supabase.table("users").upsert(record).execute()
 
-def upsert_user(user_id: int, phone: str, social: str, cookies: Optional[Dict[str, str]] = None) -> None:
-    record = {
-        "tg_user_id": user_id,
-        "phone": phone,
-        "social": social,
-        "cookies": cookies or {},
-    }
-    supabase.table("users").upsert(record, on_conflict="tg_user_id").execute()
-
-
-def save_cookies(user_id: int, cookies: Dict[str, str]) -> None:
+def save_cookies(user_id: int, cookies: Dict[str, str]):
     supabase.table("users").update({"cookies": cookies}).eq("tg_user_id", user_id).execute()
 
-
-def upsert_tracker(user_id: int, service_id: str, branch_id: str, last_best_date: Optional[str] = None) -> None:
+# ---------- Trackers ----------
+def upsert_tracker(user_id: int, service_id: str, branch_id: str, last_best_date: Optional[str] = None):
     record = {
         "tg_user_id": user_id,
         "service_id": service_id,
         "branch_id": branch_id,
-        "last_best_date": last_best_date,
+        "last_best_date": last_best_date or None,
+        "enabled": True,
     }
-    supabase.table("trackers").upsert(record, on_conflict="tg_user_id,service_id,branch_id").execute()
-
+    try:
+        supabase.table("trackers").upsert(record, on_conflict="tg_user_id,service_id,branch_id").execute()
+    except Exception:
+        supabase.table("trackers").upsert(record).execute()
 
 def get_all_trackers() -> List[Dict[str, Any]]:
-    res = supabase.table("trackers").select("*").execute()
+    res = supabase.table("trackers").select("*").eq("enabled", True).execute()
     return res.data or []
 
-
-def update_tracker_last_date(user_id: int, service_id: str, branch_id: str, day: str) -> None:
-    supabase.table("trackers").update({"last_best_date": day}).match(
-        {"tg_user_id": user_id, "service_id": service_id, "branch_id": branch_id}
-    ).execute()
+def update_tracker_last_date(user_id: int, service_id: str, branch_id: str, new_date: str):
+    supabase.table("trackers").update({"last_best_date": new_date}).eq("tg_user_id", user_id).eq("service_id", service_id).eq("branch_id", branch_id).execute()
