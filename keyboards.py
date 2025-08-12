@@ -1,38 +1,53 @@
-from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton
 
-def phone_keyboard():
+def rows(items, per_row=2):
+    return [items[i:i+per_row] for i in range(0, len(items), per_row)]
+
+def phone_request_kb():
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("📱 Ուղարկել հեռախոսահամարս", request_contact=True)]],
+        [[{"text": "📱 Ուղարկել հեռախոսահամարս", "request_contact": True}]],
         resize_keyboard=True, one_time_keyboard=True
     )
 
-def exam_type_keyboard():
+def ok_cancel_kb(ok_text="Շարունակել", cancel_text="Չեղարկել"):
+    return ReplyKeyboardMarkup([[ok_text, cancel_text]], resize_keyboard=True, one_time_keyboard=True)
+
+def services_kb(services):
+    # services: list of (id,label)
+    buttons = [[s[1]] for s in services]
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
+
+def branches_kb(branches):
+    # branches: list of (id,label)
+    buttons = [[b[1]] for b in branches]
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True, one_time_keyboard=True)
+
+def exam_type_kb():
     return ReplyKeyboardMarkup(
-        [["Տեսական", "Գործնական"]],
+        [["Տեսական", "Գործնական"], ["Բոլոր ծառայությունները"]],
         resize_keyboard=True, one_time_keyboard=True
     )
 
-def filter_keyboard():
+def filter_kb():
     return ReplyKeyboardMarkup(
-        [["Ամենամոտ օրը"], ["Ըստ ամսաթվի"], ["Ըստ ժամի"], ["Շաբաթվա օրով"], ["Բոլոր ազատ օրերը"]],
+        [["Ամենամոտ օրը", "Բոլոր ազատ օրերը"],
+         ["Ֆիլտր՝ շաբաթվա օրով", "Ֆիլտր՝ ամսաթվով"],
+         ["Ֆիլտր՝ ժամով"]],
         resize_keyboard=True, one_time_keyboard=True
     )
 
-def yes_no_keyboard():
+def weekdays_kb():
+    return ReplyKeyboardMarkup(
+        [["Երկուշաբթի", "Երեքշաբթի"],
+         ["Չորեքշաբթի", "Հինգշաբթի"],
+         ["Ուրբաթ", "Շաբաթ", "Կիրակի"]],
+        resize_keyboard=True, one_time_keyboard=True
+    )
+
+def times_kb(slots):
+    # slots: list of dicts with "label" / "value"
+    labels = [s.get("label") or s.get("value") for s in slots]
+    return ReplyKeyboardMarkup(rows(labels, per_row=3), resize_keyboard=True, one_time_keyboard=True)
+
+def yes_no_kb():
     return ReplyKeyboardMarkup([["Այո", "Ոչ"]], resize_keyboard=True, one_time_keyboard=True)
-
-def list_to_keyboard(items, row=2):
-    rows, cur = [], []
-    for txt in items:
-        cur.append(txt)
-        if len(cur) == row:
-            rows.append(cur)
-            cur = []
-    if cur:
-        rows.append(cur)
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
-
-def inline_slots_kb(slots):
-    # slots: list of {'value': '10:00', 'label': '10:00'}
-    buttons = [[InlineKeyboardButton(s["label"], callback_data=f"slot|{s['value']}")] for s in slots]
-    return InlineKeyboardMarkup(buttons)
