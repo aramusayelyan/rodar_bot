@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
+
+# Install deps (Render also runs render-build.sh, but keep it idempotent)
+pip install -r requirements.txt
+
 python main.py
