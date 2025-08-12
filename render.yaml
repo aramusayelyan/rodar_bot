@@ -1,15 +1,24 @@
 services:
-  - type: worker
-    name: dmv-exam-bot
+  - type: web
+    name: roadpolice-bot
     env: python
-    region: frankfurt
+    buildCommand: ./render-build.sh
+    startCommand: ./start.sh
     plan: free
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "bash start.sh"
     envVars:
+      - key: PORT
+        value: 10000
       - key: BOT_TOKEN
-        value: "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+        sync: false
+      - key: WEBHOOK_BASE_URL
+        sync: false
       - key: SUPABASE_URL
-        value: "YOUR_SUPABASE_URL_HERE"
-      - key: SUPABASE_SERVICE_KEY
-        value: "YOUR_SUPABASE_SERVICE_ROLE_KEY_HERE"
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_TABLE
+        value: users
+      - key: TRACK_INTERVAL_MINUTES
+        value: "120"
+      - key: LOOKAHEAD_DAYS
+        value: "30"
