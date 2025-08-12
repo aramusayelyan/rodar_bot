@@ -1,221 +1,93 @@
-import calendar
-import json
 import logging
 import re
-import urllib.parse
-from datetime import datetime, date
-from typing import Dict, Any, List, Optional, Tuple
-
+from typing import Dict, List, Tuple, Optional
 import requests
+from urllib.parse import unquote
 from bs4 import BeautifulSoup
-
 import config
 
-log = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
-BASE = config.RP_BASE
-LANG = config.RP_LANG
-TIMEOUT = config.REQUEST_TIMEOUT
-UA = config.USER_AGENT
+HEADERS_BASE = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux) AppleWebKit/537.36 (KHTML, like Gecko) PTB/13 Safari/537.36",
+    "Accept": "*/*",
+    "X-Requested-With": "XMLHttpRequest",
+    "Origin": config.RP_BASE,
+    "Referer": f"{config.RP_BASE}/{config.RP_LANG}",
+}
 
-def _new_session(cookies: Optional[Dict[str, Any]] = None) -> requests.Session:
+def _read_xsrf_token(session: requests.Session) -> Optional[str]:
+    token_cookie = session.cookies.get("XSRF-TOKEN")
+    if not token_cookie:
+        return None
+    try:
+        return unquote(token_cookie)
+    except Exception:
+        return token_cookie
+
+def _post(session: requests.Session, path: str, data: Dict[str, str]) -> Dict:
+    xsrf = _read_xsrf_token(session)
+    headers = dict(HEADERS_BASE)
+    if xsrf:
+        headers["x-csrf-token"] = xsrf
+    url = f"{config.RP_BASE}/{config.RP_LANG}/{path}"
+    r = session.post(url, data=data, headers=headers, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+def init_session(seed_cookies: Optional[Dict[str, str]] = None) -> requests.Session:
     s = requests.Session()
-    s.headers.update({
-        "User-Agent": UA,
-        "Accept": "*/*",
-        "Accept-Language": "hy-AM,hy;q=0.9,en-US;q=0.6,en;q=0.5",
-        "X-Requested-With": "XMLHttpRequest",
-    })
-    if cookies:
-        # restore stored cookies
-        for k, v in cookies.items():
+    s.get(f"{config.RP_BASE}/{config.RP_LANG}", headers=HEADERS_BASE, timeout=20)
+    s.get(f"{config.RP_BASE}/{config.RP_LANG}/hqb", headers=HEADERS_BASE, timeout=20)
+    if seed_cookies:
+        for k, v in seed_cookies.items():
             s.cookies.set(k, v, domain="roadpolice.am", secure=True)
+    _ = _read_xsrf_token(s)
     return s
 
-def _ensure_csrf_from_cookie(s: requests.Session):
-    if "X-CSRF-TOKEN" not in s.headers:
-        xsrf = s.cookies.get("XSRF-TOKEN")
-        if xsrf:
-            try:
-                s.headers["X-CSRF-TOKEN"] = urllib.parse.unquote(xsrf)
-            except Exception:
-                s.headers["X-CSRF-TOKEN"] = xsrf
+def login(session: requests.Session, psn: str, phone: str, country: str = "374") -> Dict:
+    payload = {"psn": psn, "phone_number": phone, "country": country}
+    return _post(session, "hqb-sw/login", payload)
 
-def _load_csrf(s: requests.Session) -> str:
-    # try /hy first
-    r = s.get(f"{BASE}/{LANG}", timeout=TIMEOUT)
+def verify(session: requests.Session, token: str) -> Dict:
+    return _post(session, "hqb-sw/verify", {"token": token})
+
+def fetch_branches_and_services(session: requests.Session) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+    url = f"{config.RP_BASE}/{config.RP_LANG}/hqb"
+    r = session.get(url, headers=HEADERS_BASE, timeout=20)
     r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
-    meta = soup.find("meta", attrs={"name": "csrf-token"})
-    token = meta["content"] if meta else ""
-    if not token:
-        r2 = s.get(f"{BASE}/{LANG}/hqb", timeout=TIMEOUT)
-        r2.raise_for_status()
-        soup2 = BeautifulSoup(r2.text, "html.parser")
-        meta2 = soup2.find("meta", attrs={"name": "csrf-token"})
-        token = meta2["content"] if meta2 else ""
-    if token:
-        s.headers["X-CSRF-TOKEN"] = token
-    else:
-        _ensure_csrf_from_cookie(s)
-    return s.headers.get("X-CSRF-TOKEN", "")
+    soup = BeautifulSoup(r.text, "lxml")
 
-def _serialize_cookies(s: requests.Session) -> Dict[str, str]:
-    jar = {}
-    for c in s.cookies:
-        if c.domain.endswith("roadpolice.am"):
-            jar[c.name] = c.value
-    return jar
+    def parse_select(name: str) -> List[Tuple[str, str]]:
+        sel = soup.select_one(f'select[name="{name}"]')
+        items: List[Tuple[str, str]] = []
+        if sel:
+            for opt in sel.find_all("option"):
+                val = (opt.get("value") or "").strip()
+                txt = (opt.text or "").strip()
+                if not val or not txt:
+                    continue
+                items.append((val, txt))
+        return items
 
-def normalize_phone_to_local(phone: str) -> str:
-    p = re.sub(r"\D", "", phone)
-    # strip leading country code 374 or +374
-    if p.startswith("374"):
-        p = p[3:]
-    if p.startswith("0"):
-        p = p[1:]
-    return p
+    branches = parse_select("branchId")
+    services = parse_select("serviceId")
+    return branches, services
 
-# -------- Login flow ----------
+def nearest_day(session: requests.Session, branch_id: str, service_id: str, from_date_dd_mm_yyyy: str) -> Dict:
+    return _post(session, "hqb-nearest-day", {
+        "branchId": branch_id, "serviceId": service_id, "date": from_date_dd_mm_yyyy
+    })
 
-def login_init(sess: requests.Session, psn: str, phone: str, country: str = "AM") -> Dict[str, Any]:
-    if "X-CSRF-TOKEN" not in sess.headers:
-        _load_csrf(sess)
-    _ensure_csrf_from_cookie(sess)
-    headers = {"Referer": f"{BASE}/{LANG}"}
-    data = {"psn": psn, "phone_number": phone, "country": country, "login_type": "hqb"}
-    r = sess.post(f"{BASE}/{LANG}/hqb-sw/login", headers=headers, data=data, timeout=TIMEOUT)
-    if r.status_code >= 400:
-        # fallback with numeric country code
-        data["country"] = "374"
-        r = sess.post(f"{BASE}/{LANG}/hqb-sw/login", headers=headers, data=data, timeout=TIMEOUT)
-    r.raise_for_status()
-    try:
-        return r.json()
-    except Exception:
-        return {"ok": True}
+def slots_for_day(session: requests.Session, branch_id: str, service_id: str, date_dd_mm_yyyy: str) -> List[Dict]:
+    resp = _post(session, "hqb-slots-for-day", {
+        "branchId": branch_id, "serviceId": service_id, "date": date_dd_mm_yyyy
+    })
+    return resp.get("data") or []
 
-def login_verify(sess: requests.Session, psn: str, phone: str, token: str, country: str = "AM") -> Dict[str, Any]:
-    if "X-CSRF-TOKEN" not in sess.headers:
-        _load_csrf(sess)
-    _ensure_csrf_from_cookie(sess)
-    headers = {"Referer": f"{BASE}/{LANG}"}
-    data = {"psn": psn, "phone_number": phone, "token": token, "country": country, "login_type": "hqb"}
-    r = sess.post(f"{BASE}/{LANG}/hqb-sw/login_token", headers=headers, data=data, timeout=TIMEOUT)
-    if r.status_code >= 400:
-        data["country"] = "374"
-        r = sess.post(f"{BASE}/{LANG}/hqb-sw/login_token", headers=headers, data=data, timeout=TIMEOUT)
-    r.raise_for_status()
-    try:
-        return r.json()
-    except Exception:
-        return {"ok": True}
-
-# -------- Parsing helpers ----------
-
-def _parse_select_options(soup: BeautifulSoup, select_name: str) -> List[Dict[str, str]]:
-    sel = soup.select_one(f"select[name='{select_name}']")
-    out = []
-    if not sel:
-        return out
-    for opt in sel.find_all("option"):
-        val = (opt.get("value") or "").strip()
-        label = (opt.text or "").strip()
-        if not val:
-            continue
-        out.append({"id": val, "label": label})
-    return out
-
-def fetch_services_branches(sess: requests.Session) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
-    r = sess.get(f"{BASE}/{LANG}/hqb", timeout=TIMEOUT)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "html.parser")
-    services = _parse_select_options(soup, "serviceId")
-    branches = _parse_select_options(soup, "branchId")
-    return services, branches
-
-# -------- Slots / Register ----------
-
-def slots_for_month(sess: requests.Session, branch_id: str, service_id: str, day_str: str) -> List[str]:
-    """returns disabled dates list from API (format likely 'd-m-Y')."""
-    if "X-CSRF-TOKEN" not in sess.headers:
-        _load_csrf(sess)
-    _ensure_csrf_from_cookie(sess)
-    headers = {"Referer": f"{BASE}/{LANG}"}
-    data = {"branchId": branch_id, "serviceId": service_id, "date": day_str}
-    r = sess.post(f"{BASE}/{LANG}/hqb-slots-for-month", headers=headers, data=data, timeout=TIMEOUT)
-    r.raise_for_status()
-    js = r.json()
-    return js.get("data", []) or []
-
-def slots_for_day(sess: requests.Session, branch_id: str, service_id: str, day_str: str) -> List[Dict[str, str]]:
-    if "X-CSRF-TOKEN" not in sess.headers:
-        _load_csrf(sess)
-    _ensure_csrf_from_cookie(sess)
-    headers = {"Referer": f"{BASE}/{LANG}"}
-    data = {"branchId": branch_id, "serviceId": service_id, "date": day_str}
-    r = sess.post(f"{BASE}/{LANG}/hqb-slots-for-day", headers=headers, data=data, timeout=TIMEOUT)
-    r.raise_for_status()
-    js = r.json()
-    return js.get("data", []) or []
-
-def nearest_day(sess: requests.Session, branch_id: str, service_id: str, ref_date_str: str) -> Optional[Dict[str, Any]]:
-    """try API nearest-day, fallback to month/day scan."""
-    if "X-CSRF-TOKEN" not in sess.headers:
-        _load_csrf(sess)
-    _ensure_csrf_from_cookie(sess)
-    headers = {"Referer": f"{BASE}/{LANG}"}
-    data = {"branchId": branch_id, "serviceId": service_id, "date": ref_date_str}
-    r = sess.post(f"{BASE}/{LANG}/hqb-nearest-day", headers=headers, data=data, timeout=TIMEOUT)
-    if r.ok:
-        js = r.json()
-        if js.get("data") and js["data"].get("day"):
-            return js["data"]
-    # fallback: compute available day and first slots
-    # ref_date_str format expected "dd-mm-YYYY"
-    d0 = datetime.strptime(ref_date_str, "%d-%m-%Y").date()
-    y, m = d0.year, d0.month
-    # try current month then next month
-    for _ in range(2):
-        first_day = date(y, m, 1)
-        disabled = set(slots_for_month(sess, branch_id, service_id, first_day.strftime("%d-%m-%Y")))
-        # build all working days in month
-        _, ndays = calendar.monthrange(y, m)
-        candidates = []
-        for day in range(1, ndays + 1):
-            dt = date(y, m, day)
-            if dt.weekday() >= 5:  # 5,6 -> weekend
-                continue
-            key = dt.strftime("%d-%m-%Y")
-            if key in disabled:
-                continue
-            if dt >= d0:
-                candidates.append(dt)
-        for dt in candidates:
-            slots = slots_for_day(sess, branch_id, service_id, dt.strftime("%d-%m-%Y"))
-            if slots:
-                return {"day": dt.strftime("%d-%m-%Y"), "slots": slots}
-        # move to next month
-        if m == 12:
-            y, m = y + 1, 1
-        else:
-            m += 1
-        d0 = date(y, m, 1)
-    return None
-
-def register_appointment(sess: requests.Session, branch_id: str, service_id: str, day_str: str, slot_value: str, email: str) -> Dict[str, Any]:
-    if "X-CSRF-TOKEN" not in sess.headers:
-        _load_csrf(sess)
-    _ensure_csrf_from_cookie(sess)
-    headers = {"Referer": f"{BASE}/{LANG}"}
-    data = {
-        "branchId": branch_id,
-        "serviceId": service_id,
-        "date": day_str,
-        "slotTime": slot_value,
-        "email": email,
-    }
-    r = sess.post(f"{BASE}/{LANG}/hqb-register", headers=headers, data=data, timeout=TIMEOUT)
-    r.raise_for_status()
-    js = r.json()
-    return js
+def register_slot(session: requests.Session, branch_id: str, service_id: str,
+                  date_dd_mm_yyyy: str, slot_time: str, email: str) -> Dict:
+    return _post(session, "hqb-register", {
+        "branchId": branch_id, "serviceId": service_id,
+        "date": date_dd_mm_yyyy, "slotTime": slot_time, "email": email
+    })
